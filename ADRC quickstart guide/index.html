@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,22 +7,8 @@
 <meta name="description" content="Setting up and tuning active disturbance rejection control (ADRC) as an alternative to PID control.">
 <style>
   :root {
+    color-scheme: light;
     --bf-orange: #ffbb00;
-    --bg: #1b1b1d;
-    --bg-alt: #242526;
-    --bg-code: #16171a;
-    --text: #e3e3e3;
-    --text-dim: #a8a8a8;
-    --border: #3a3c40;
-    --link: #ffc736;
-    --tip: #00a400;
-    --info: #4cb3d4;
-    --caution: #e6a700;
-    --danger: #e13238;
-    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    --mono: "SFMono-Regular", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
-  }
-  html[data-theme="light"] {
     --bg: #ffffff;
     --bg-alt: #f5f6f7;
     --bg-code: #f0f1f3;
@@ -30,8 +16,13 @@
     --text-dim: #606770;
     --border: #dadde1;
     --link: #b37f00;
+    --tip: #00a400;
+    --info: #4cb3d4;
+    --caution: #e6a700;
+    --danger: #e13238;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: "SFMono-Regular", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
   }
-
   * { box-sizing: border-box; }
   html, body { margin: 0; }
   body {
@@ -56,7 +47,7 @@
     padding: 0 20px;
     background: var(--bg-alt);
     border-bottom: 1px solid var(--border);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
   .brand {
     display: flex;
@@ -78,17 +69,6 @@
   }
   .navbar .spacer { flex: 1; }
   .navbar a.nav-link { color: var(--text); font-weight: 500; }
-  .theme-toggle {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
-    border-radius: 6px;
-    padding: 5px 10px;
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-  .theme-toggle:hover { border-color: var(--text-dim); }
 
   /* ---------- layout ---------- */
   .page {
@@ -267,7 +247,6 @@
   <span class="brand"><span class="mark">AD</span> ADRC docs</span>
   <span class="spacer"></span>
   <a class="nav-link" href="../ADRC%20demo/">Tuning sandbox</a>
-  <button class="theme-toggle" id="theme-toggle" type="button">Light</button>
 </nav>
 
 <div class="page">
@@ -599,23 +578,6 @@ save</code></pre>
 </div>
 
 <script>
-  // Theme toggle, remembering the choice on this device
-  const root = document.documentElement;
-  const btn = document.getElementById("theme-toggle");
-  let stored = null;
-  try { stored = localStorage.getItem("adrc-theme"); } catch (e) {}
-  const start = stored || (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
-  setTheme(start);
-  function setTheme(t) {
-    root.setAttribute("data-theme", t);
-    btn.textContent = t === "dark" ? "Light" : "Dark";
-  }
-  btn.addEventListener("click", () => {
-    const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
-    setTheme(next);
-    try { localStorage.setItem("adrc-theme", next); } catch (e) {}
-  });
-
   // Highlight the section currently in view
   const links = [...document.querySelectorAll("#toc a")];
   const byId = new Map(links.map(a => [a.getAttribute("href").slice(1), a]));
