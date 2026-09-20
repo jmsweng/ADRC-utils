@@ -216,6 +216,7 @@
   .ctl label { font-weight: 500; }
   .ctl .sym { font-style: italic; font-family: "Cambria Math", "Times New Roman", serif; }
   .ctl .hint { color: var(--muted); font-weight: 400; }
+  .ctl .note { color: var(--muted); font-size: 0.85rem; margin: 0; }
   input[type="range"] {
     width: 100%;
     accent-color: var(--accent);
@@ -638,7 +639,8 @@ const PARAMS = [
   { key: "wo", label: '<span class="sym">&omega;<sub>o</sub></span> <span class="hint">observer bandwidth</span>',
     min: 5, max: 400, step: 0.1, def: 90, num: true, group: "tuning" },
   { key: "b0", label: '<span class="sym">b</span><sub>0</sub> <span class="hint">estimated gain</span>',
-    min: 500, max: 10000, step: 0.1, def: 3000, num: true, group: "tuning" },
+    min: 500, max: 10000, step: 0.1, def: 3000, num: true, group: "tuning",
+    note: "Real plant gain (<i>b</i><sub>real</sub>) is fixed at 3000." },
   { key: "noise", label: "Gyro noise",            min: 0, max: 50,   step: 0.1,  def: 20,  num: false, group: "conditions" },
   { key: "dist",  label: "Disturbance amplitude", min: 0, max: 1e6,  step: 1000, def: 2e5, num: false, group: "conditions" },
   { key: "motor", label: "Motor lag",             min: 0, max: 15,   step: 0.05, def: 2,   num: false, group: "conditions" },
@@ -659,7 +661,8 @@ for (const p of PARAMS) {
       ${p.num ? `<input type="number" id="${id}-num" min="${p.min}" max="${p.max}" step="any"
                   aria-label="${p.key} value">` : ""}
     </div>
-    <input type="range" id="${id}" min="${p.min}" max="${p.max}" step="${p.step}">`;
+    <input type="range" id="${id}" min="${p.min}" max="${p.max}" step="${p.step}">
+    ${p.note ? `<p class="note">${p.note}</p>` : ""}`;
   document.getElementById(p.group).appendChild(wrap);
 
   const range = wrap.querySelector('input[type="range"]');
