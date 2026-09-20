@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plant fit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light;
+    --paper: #edf1f4;
+    --panel: #ffffff;
+    --ink: #16222e;
+    --muted: #5b6b7a;
+    --rule: #c9d3dc;
+    --signal: #2356c7;
+    --signal-soft: #dfe7f8;
+    --caution: #8a5700;
+    --caution-soft: #fbf0d9;
+    --error: #a3261b;
+    --error-soft: #fbe3e0;
+    --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font: 16px/1.55 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 1120px; margin: 0 auto; padding: 48px 24px 80px; }
+
+  header h1 {
+    font-size: clamp(2.4rem, 6vw, 3.6rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    margin: 0 0 12px;
+  }
+  header p { margin: 0; max-width: 62ch; color: var(--muted); font-size: 1.05rem; }
+  header .header-note { margin-top: 10px; }
+
+  /* Drop zone: the chirp trace is the page's one bit of character */
+  .drop {
+    position: relative;
+    display: block;
+    margin-top: 32px;
+    background: var(--panel);
+    border: 1.5px dashed var(--rule);
+    border-radius: 14px;
+    padding: 0 28px 28px;
+    cursor: pointer;
+    transition: border-color .15s, background-color .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--signal); }
+  .drop.over { background: var(--signal-soft); }
+  .drop:focus-within { outline: 3px solid var(--signal); outline-offset: 3px; }
+  .drop.disabled { cursor: progress; }
+  .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .chirp { display: block; width: 100%; height: 72px; margin-bottom: 8px; }
+  .chirp path {
+    fill: none; stroke: var(--signal); stroke-width: 2; stroke-linecap: round;
+    opacity: .85;
+  }
+  .drop.busy .chirp path {
+    stroke-dasharray: 14 10;
+    animation: travel 0.9s linear infinite;
+  }
+  @keyframes travel { to { stroke-dashoffset: -24; } }
+  .drop-title { font-size: 1.25rem; font-weight: 600; margin: 0 0 4px; }
+  .drop-sub { margin: 0; color: var(--muted); }
+  .browse { color: var(--signal); text-decoration: underline; text-underline-offset: 3px; }
+
+  .status {
+    display: flex; align-items: center; gap: 10px;
+    margin-top: 16px; color: var(--muted); font-size: .95rem;
+    min-height: 1.6em;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--rule); flex: none; }
+  .status[data-state="loading"] .dot, .status[data-state="running"] .dot { background: var(--signal); animation: pulse 1.2s ease-in-out infinite; }
+  .status[data-state="ready"] .dot { background: #2f8a55; }
+  .status[data-state="error"] .dot { background: var(--error); }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  .error {
+    margin-top: 24px; padding: 16px 20px; border-radius: 10px;
+    background: var(--error-soft); color: var(--error);
+  }
+  .error p { margin: 0 0 6px; }
+  .error details { color: var(--ink); margin-top: 8px; }
+
+  #results { margin-top: 48px; }
+  #results[hidden] { display: none; }
+  .file-name { font-size: 1.6rem; font-weight: 600; margin: 0 0 20px; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+  h3 { font-size: 1.05rem; font-weight: 600; margin: 40px 0 12px; }
+
+  .figure {
+    display: block; background: #fff; border: 1px solid var(--rule);
+    border-radius: 10px; padding: 8px; overflow-x: auto;
+  }
+  .figure img { display: block; width: 100%; min-width: 720px; height: auto; }
+  .hint { color: var(--muted); font-size: .9rem; margin: 8px 0 0; }
+
+  .table-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 10px 18px; white-space: nowrap; }
+  th { font-weight: 600; border-bottom: 2px solid var(--ink); }
+  tbody tr:nth-child(even) td { background: #f3f6f8; }
+  td:first-child { font-weight: 500; text-transform: capitalize; }
+
+  .warnings { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .warnings li {
+    background: var(--caution-soft); color: var(--caution);
+    padding: 10px 16px; border-radius: 8px; border-left: 4px solid var(--caution);
+  }
+  .warnings li b { text-transform: capitalize; margin-right: 6px; }
+  .all-clear { color: #2f8a55; margin: 0; }
+
+  details { margin-top: 12px; }
+  summary { cursor: pointer; font-weight: 500; }
+  summary:focus-visible { outline: 3px solid var(--signal); outline-offset: 2px; border-radius: 4px; }
+  pre {
+    font: 13px/1.5 var(--mono); background: var(--panel); border: 1px solid var(--rule);
+    border-radius: 10px; padding: 16px; overflow-x: auto; margin: 12px 0 0;
+  }
+  .guide { max-width: 72ch; }
+  .guide ul { padding-left: 1.2em; }
+  .guide li { margin-bottom: 6px; }
+
+  footer { margin-top: 64px; color: var(--muted); font-size: .85rem; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .drop.busy .chirp path, .status .dot { animation: none !important; }
+  }
+  @media (max-width: 600px) {
+    main { padding: 32px 16px 64px; }
+    .drop { padding: 0 18px 22px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Plant fit</h1>
+    <p>Identify the roll, pitch and yaw plant from a Betaflight blackbox log and get b0 estimates for ADRC tuning. Everything runs in this browser tab.</p>
+    <p class="header-note">The Python packages take a little while to load when the page first opens, so wait for the status below to say it's ready before dropping in a file.</p>
+  </header>
+
+  <label class="drop disabled" id="drop">
+    <svg class="chirp" viewBox="0 0 1000 72" preserveAspectRatio="none" aria-hidden="true"><path id="chirpPath"/></svg>
+    <input type="file" id="file" accept=".csv,text/csv" disabled>
+    <p class="drop-title">Drop a blackbox CSV here</p>
+    <p class="drop-sub">or <span class="browse">choose a file</span>. Export the .bbl log to CSV with Blackbox Explorer first.</p>
+  </label>
+
+  <div class="status" id="status" data-state="loading" role="status" aria-live="polite">
+    <span class="dot"></span><span id="statusText">Starting Python…</span>
+  </div>
+
+  <div class="error" id="error" hidden></div>
+
+  <section id="results" hidden aria-labelledby="resultName">
+    <h2 class="file-name" id="resultName"></h2>
+
+    <h3>Plant fits</h3>
+    <a class="figure" id="figLink" target="_blank" rel="noopener"><img id="figImg" alt="Recovered plant magnitude and model fits for roll, pitch and yaw"></a>
+    <p class="hint">Check that the fitted lines follow the recovered data. If the fits look nonsensical, the numbers below will be too. Select the plot to open it full size.</p>
+
+    <h3>b0 (deg/s per u) by method</h3>
+    <div class="table-wrap"><table id="b0Table"><thead></thead><tbody></tbody></table></div>
+
+    <h3>Warnings</h3>
+    <div id="warnings"></div>
+
+    <details class="guide">
+      <summary>Reading the results</summary>
+      <ul>
+        <li>Inspect the plant fit plots first. They should look reasonable before you trust any of the numbers.</li>
+        <li>If the methods in the b0 table disagree significantly, use your own judgement about which fit most closely matches the recovered G.</li>
+        <li>Start tuning with the recovered b0 for each axis from the fit that best matches the recovered data. On a chirp flight this is usually the controller-free fit.</li>
+        <li>A “2nd pole above the excited band” warning, most common on yaw, means that axis wasn’t excited enough for a proper fit. Since b0 doesn’t need to be exact, the value can usually still be used without repeating the flight.</li>
+      </ul>
+    </details>
+  </section>
+
+  <footer>Runs Python code in your browser with Pyodide (Python compiled to WebAssembly). The first visit downloads about 40 MB of Python libraries; later visits load from the browser cache.</footer>
+</main>
+
+<!-- Python glue that runs plant_fit.show_fit_summary with the notebook's settings -->
+<script type="text/x-python" id="runner">
+import sys, io, types, base64, warnings
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+# Browser Python is 32-bit, and scipy 1.14's Welch/CSD code builds a strided
+# view of EVERY possible window before keeping one per step. For a long log that
+# view's nominal size overflows 32 bits ("array is too big"), even though no
+# memory is used. This replacement builds only the windows that are kept, and
+# otherwise matches scipy's _fft_helper line for line, so results are identical.
+import numpy as np
+from scipy import fft as _sp_fft
+from scipy.signal import _spectral_py
+
+def _fft_helper_32bit_safe(x, win, detrend_func, nperseg, noverlap, nfft, sides):
+    if nperseg == 1 and noverlap == 0:
+        result = x[..., np.newaxis]
+    else:
+        step = nperseg - noverlap
+        nseg = (x.shape[-1] - nperseg) // step + 1
+        result = np.lib.stride_tricks.as_strided(
+            x, shape=x.shape[:-1] + (nseg, nperseg),
+            strides=x.strides[:-1] + (step * x.strides[-1], x.strides[-1]),
+            writeable=True)
+    result = detrend_func(result)
+    result = win * result
+    if sides == 'twosided':
+        func = _sp_fft.fft
+    else:
+        result = result.real
+        func = _sp_fft.rfft
+    return func(result, n=nfft)
+
+if hasattr(_spectral_py, "_fft_helper"):
+    _spectral_py._fft_helper = _fft_helper_32bit_safe
+
+# plant_fit.py imports IPython.display, which isn't available in the browser.
+# Give it a stand-in just for the import, then remove it again so matplotlib
+# doesn't mistake it for a real IPython session.
+_stubbed = False
+try:
+    import IPython.display  # noqa: F401
+except ImportError:
+    _ip = types.ModuleType("IPython")
+    _ipd = types.ModuleType("IPython.display")
+    _ipd.display = lambda *a, **k: None
+    _ip.display = _ipd
+    sys.modules["IPython"] = _ip
+    sys.modules["IPython.display"] = _ipd
+    _stubbed = True
+
+import plant_fit
+if _stubbed:
+    del sys.modules["IPython"], sys.modules["IPython.display"]
+plant_fit.display = lambda *a, **k: None   # tables are rendered from the returned DataFrames
+
+# Same settings as the notebook. The true/false toggles stay off.
+WC = {"roll": 40,   "pitch": 40,   "yaw": 40}
+WO = {"roll": 100,  "pitch": 100,  "yaw": 100}
+B0 = {"roll": 5000, "pitch": 5000, "yaw": 5000}
+ADRC_FLIGHT = False
+SUGGEST_WC = False
+SAVE_OUTPUTS = False
+F_HI = 15
+COH_MIN = 0.3
+
+_figures = []
+
+def _capture_show(*args, **kwargs):
+    for num in plt.get_fignums():
+        buf = io.BytesIO()
+        plt.figure(num).savefig(buf, format="png", dpi=110)
+        _figures.append(base64.b64encode(buf.getvalue()).decode("ascii"))
+
+plt.show = _capture_show
+
+
+def run_fit(csv_path):
+    _figures.clear()
+    plt.close("all")
+    cap = io.StringIO()
+    # plant_fit tees its per-axis log to sys.__stdout__, so capture that too
+    old_out, old_dunder = sys.stdout, sys.__stdout__
+    sys.stdout = sys.__stdout__ = cap
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _, b0_table, _ = plant_fit.show_fit_summary(
+                csv_path, WC, WO, B0, f_hi=F_HI, coh_min=COH_MIN,
+                adrc_flight=ADRC_FLIGHT, suggest_wc=SUGGEST_WC,
+                save_outputs=SAVE_OUTPUTS)
+    finally:
+        sys.stdout, sys.__stdout__ = old_out, old_dunder
+        plt.close("all")
+
+    text = cap.getvalue()
+    lines = text.splitlines()
+    summary_warnings = [ln for ln in lines if ln.startswith("[WARNING:")]
+    log = "\n".join(ln for ln in lines
+                    if not ln.startswith("[WARNING:") and ln.strip() != "No warnings.").strip()
+    return {
+        "figures": list(_figures),
+        "columns": [str(c) for c in b0_table.columns],
+        "rows": [[str(v) for v in row] for row in b0_table.itertuples(index=False)],
+        "warnings": summary_warnings,
+        "log": log,
+    }
+</script>
+
+<script type="module">
+const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.29.5/full/";
+
+// ---------- chirp trace in the drop zone ----------
+(() => {
+  const pts = [];
+  for (let i = 0; i <= 600; i++) {
+    const x = i / 600;
+    const phase = 2 * Math.PI * (2 * x + 11 * x * x);
+    const amp = 26 * (1 - 0.35 * x);
+    pts.push(`${(x * 1000).toFixed(1)},${(36 + amp * Math.sin(phase)).toFixed(2)}`);
+  }
+  document.getElementById("chirpPath").setAttribute("d", "M" + pts.join(" L"));
+})();
+
+// ---------- worker that hosts Python ----------
+const workerSrc = `
+import { loadPyodide } from "${PYODIDE}pyodide.mjs";
+let py;
+let ready;
+
+async function init(plantFitUrl, runnerCode) {
+  self.postMessage({ type: "status", text: "Loading Python…" });
+  py = await loadPyodide({ indexURL: "${PYODIDE}" });
+  self.postMessage({ type: "status", text: "Loading numpy, scipy, pandas and matplotlib…" });
+  await py.loadPackage(["numpy", "scipy", "pandas", "matplotlib", "jinja2"]);
+  const resp = await fetch(plantFitUrl, { cache: "no-cache" });
+  if (!resp.ok) throw new Error("Could not load plant_fit.py (HTTP " + resp.status + "). Keep it next to index.html.");
+  py.FS.writeFile("plant_fit.py", await resp.text());
+  await py.runPythonAsync(runnerCode);
+}
+
+self.onmessage = async (e) => {
+  const m = e.data;
+  if (m.type === "init") {
+    ready = init(m.plantFitUrl, m.runnerCode);
+    try { await ready; self.postMessage({ type: "ready" }); }
+    catch (err) { self.postMessage({ type: "fatal", message: String(err && err.message || err) }); }
+    return;
+  }
+  if (m.type === "run") {
+    const path = "/tmp/" + m.name;
+    try {
+      await ready;
+      py.FS.writeFile(path, new Uint8Array(m.bytes));
+      const t0 = performance.now();
+      const proxy = py.globals.get("run_fit")(path);
+      const result = proxy.toJs({ dict_converter: Object.fromEntries });
+      proxy.destroy();
+      self.postMessage({ type: "result", name: m.name, result, seconds: (performance.now() - t0) / 1000 });
+    } catch (err) {
+      self.postMessage({ type: "error", name: m.name, message: String(err && err.message || err) });
+    } finally {
+      try { py.FS.unlink(path); } catch (_) {}
+    }
+  }
+};
+self.postMessage({ type: "booted" });
+`;
+
+const worker = new Worker(URL.createObjectURL(new Blob([workerSrc], { type: "text/javascript" })), { type: "module" });
+
+const $ = (id) => document.getElementById(id);
+const drop = $("drop"), fileInput = $("file"), statusEl = $("status"), statusText = $("statusText");
+let isReady = false, isBusy = false, figUrl = null;
+
+function setStatus(state, text) { statusEl.dataset.state = state; statusText.textContent = text; }
+function setBusy(b) {
+  isBusy = b;
+  drop.classList.toggle("busy", b);
+  drop.classList.toggle("disabled", b || !isReady);
+  fileInput.disabled = b || !isReady;
+}
+
+function showError(summary, detail) {
+  const box = $("error");
+  box.replaceChildren();
+  const p = document.createElement("p");
+  p.textContent = summary;
+  box.append(p);
+  if (detail) {
+    const d = document.createElement("details");
+    const s = document.createElement("summary");
+    s.textContent = "Python traceback";
+    const pre = document.createElement("pre");
+    pre.textContent = detail;
+    d.append(s, pre);
+    box.append(d);
+  }
+  box.hidden = false;
+}
+
+// Pull the last "SomeError: message" line out of a Python traceback
+function lastErrorLine(msg) {
+  const lines = msg.trim().split("\n").filter((l) => l.trim());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^[A-Za-z_][\w.]*(Error|Exception)\b/.test(lines[i])) return lines[i];
+  }
+  return lines[lines.length - 1] || msg;
+}
+
+worker.onmessage = (e) => {
+  const m = e.data;
+  if (m.type === "booted") {
+    worker.postMessage({
+      type: "init",
+      plantFitUrl: new URL("plant_fit.py", location.href).href,
+      runnerCode: $("runner").textContent,
+    });
+  } else if (m.type === "status") setStatus("loading", m.text);
+  else if (m.type === "ready") {
+    isReady = true; setBusy(false);
+    setStatus("ready", "Ready. Drop a CSV to run the fit.");
+  } else if (m.type === "fatal") {
+    setStatus("error", "Python failed to start.");
+    showError(m.message.includes("plant_fit.py") ? m.message
+      : "Python could not start in this browser. Check your connection and reload the page.", m.message);
+  } else if (m.type === "result") {
+    setBusy(false);
+    setStatus("ready", `Finished ${m.name} in ${m.seconds.toFixed(1)} s. Drop another CSV to run again.`);
+    render(m.name, m.result);
+  } else if (m.type === "error") {
+    setBusy(false);
+    setStatus("error", `The fit failed on ${m.name}.`);
+    const msg = m.message.split("/tmp/").join("");
+    showError(lastErrorLine(msg), msg);
+  }
+};
+
+// If the worker script itself can't load (offline, CDN blocked), say so
+worker.onerror = (e) => {
+  setStatus("error", "Python failed to start.");
+  showError("Could not download Pyodide from cdn.jsdelivr.net. Check your connection and reload the page.");
+};
+
+async function runFile(file) {
+  if (!file || !isReady || isBusy) return;
+  if (!/\.csv$/i.test(file.name)) {
+    showError(`${file.name} is not a CSV. Export the blackbox log to CSV and try again.`);
+    return;
+  }
+  $("error").hidden = true;
+  $("results").hidden = true;
+  setBusy(true);
+  setStatus("running", `Running the fit on ${file.name}…`);
+  const bytes = await file.arrayBuffer();
+  const safeName = file.name.replace(/[\\/]/g, "_");
+  worker.postMessage({ type: "run", name: safeName, bytes }, [bytes]);
+}
+
+function render(name, r) {
+  $("resultName").textContent = name;
+
+  if (figUrl) URL.revokeObjectURL(figUrl);
+  const b64 = r.figures[r.figures.length - 1];
+  const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  figUrl = URL.createObjectURL(new Blob([bin], { type: "image/png" }));
+  $("figImg").src = figUrl;
+  $("figLink").href = figUrl;
+
+  const thead = $("b0Table").tHead, tbody = $("b0Table").tBodies[0];
+  thead.replaceChildren(); tbody.replaceChildren();
+  const hr = thead.insertRow();
+  for (const c of r.columns) { const th = document.createElement("th"); th.textContent = c; hr.append(th); }
+  for (const row of r.rows) {
+    const tr = tbody.insertRow();
+    for (const v of row) tr.insertCell().textContent = v;
+  }
+
+  const w = $("warnings");
+  w.replaceChildren();
+  if (r.warnings.length) {
+    const ul = document.createElement("ul");
+    ul.className = "warnings";
+    for (const line of r.warnings) {
+      const m = line.match(/^\[WARNING:\s*(\w+)\]\s*(.*)$/);
+      const li = document.createElement("li");
+      if (m) { const b = document.createElement("b"); b.textContent = m[1]; li.append(b, m[2]); }
+      else li.textContent = line;
+      ul.append(li);
+    }
+    w.append(ul);
+  } else {
+    const p = document.createElement("p");
+    p.className = "all-clear";
+    p.textContent = "No warnings.";
+    w.append(p);
+  }
+
+  $("results").hidden = false;
+  $("results").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+}
+
+fileInput.addEventListener("change", () => { runFile(fileInput.files[0]); fileInput.value = ""; });
+["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => {
+  e.preventDefault();
+  if (isReady && !isBusy) drop.classList.add("over");
+}));
+["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => runFile(e.dataTransfer.files[0]));
+// Stop a file dropped just outside the zone from navigating the page away
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => e.preventDefault());
+</script>
+</body>
+</html>
