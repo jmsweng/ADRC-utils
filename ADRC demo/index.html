@@ -18,11 +18,12 @@
     --grid: #e3e9ee;
     --accent: #1f5fd1;
     /* trace colours (kept the same as the Python version) */
-    --c-y: #1f5fd1;
-    --c-ref: #c8352e;
-    --c-z1: #e39b00;
-    --c-u: #2e8b57;
-    --c-um: #7a3fb5;
+    /* Okabe-Ito colour-blind safe palette; line dashes also differ */
+    --c-y: #0072b2;    /* blue */
+    --c-ref: #444c53;  /* neutral grey, dashed */
+    --c-z1: #e69f00;   /* orange */
+    --c-u: #009e73;    /* bluish green */
+    --c-um: #cc79a7;   /* reddish purple */
     --c-dist: #8795a3;
     --warn-ink: #8f1d1d;
     --warn-bg: #fdecec;
@@ -39,11 +40,11 @@
       --rule: #2c3a47;
       --grid: #223040;
       --accent: #6fa0ff;
-      --c-y: #6fa0ff;
-      --c-ref: #ff6b5e;
-      --c-z1: #ffc24a;
-      --c-u: #5ccb8a;
-      --c-um: #b98af0;
+      --c-y: #56b4e9;
+      --c-ref: #b7c2cc;
+      --c-z1: #e69f00;
+      --c-u: #35c79a;
+      --c-um: #e79ac0;
       --c-dist: #7c8b99;
       --warn-ink: #ffb4ab;
       --warn-bg: #3a1a1a;
@@ -132,8 +133,8 @@
   .sw.dotted { border-top-style: dotted; }
 
   canvas { display: block; width: 100%; }
-  #cv-main { height: 240px; }
-  #cv-zoom, #cv-dzoom { height: 210px; }
+  #cv-main { height: 256px; }
+  #cv-zoom, #cv-dzoom { height: 226px; }
   #cv-u { height: 190px; }
 
   .banner {
@@ -293,7 +294,7 @@
 
     <figure>
       <figcaption>
-        <h2>Step response</h2>
+        <h2>Step response: full run</h2>
         <ul class="legend">
           <li><span class="sw" style="border-color:var(--c-y)"></span>Plant output (y)</li>
           <li><span class="sw dashed" style="border-color:var(--c-ref)"></span>Reference (r)</li>
@@ -307,22 +308,22 @@
     <div class="zooms">
       <figure>
         <figcaption>
-          <h2>Zoom: step (&minus;0.5 to 0.5 s)</h2>
+          <h2>Step response: zoom (&minus;0.5 to 0.5 s)</h2>
           <ul class="legend">
-            <li><span class="sw" style="border-color:var(--c-y)"></span>y</li>
+            <li><span class="sw" style="border-color:var(--c-y)"></span>Plant output (y)</li>
             <li><span class="sw" style="border-color:var(--c-z1)"></span>ESO estimate (z1)</li>
-            <li><span class="sw dashed" style="border-color:var(--c-ref)"></span>r</li>
+            <li><span class="sw dashed" style="border-color:var(--c-ref)"></span>Reference (r)</li>
           </ul>
         </figcaption>
         <canvas id="cv-zoom"></canvas>
       </figure>
       <figure>
         <figcaption>
-          <h2>Zoom: disturbance (2.5 to 3 s)</h2>
+          <h2>Disturbance response: zoom (2.5 to 3 s)</h2>
           <ul class="legend">
-            <li><span class="sw" style="border-color:var(--c-y)"></span>y</li>
-            <li><span class="sw" style="border-color:var(--c-z1)"></span>z1</li>
-            <li><span class="sw dashed" style="border-color:var(--c-ref)"></span>r</li>
+            <li><span class="sw" style="border-color:var(--c-y)"></span>Plant output (y)</li>
+            <li><span class="sw" style="border-color:var(--c-z1)"></span>ESO estimate (z1)</li>
+            <li><span class="sw dashed" style="border-color:var(--c-ref)"></span>Reference (r)</li>
           </ul>
         </figcaption>
         <canvas id="cv-dzoom"></canvas>
@@ -331,10 +332,10 @@
 
     <figure>
       <figcaption>
-        <h2>Control effort</h2>
+        <h2>Control effort: full run</h2>
         <ul class="legend">
           <li><span class="sw" style="border-color:var(--c-u)"></span>Command (u)</li>
-          <li><span class="sw" style="border-color:var(--c-um)"></span>Motor output (lagged)</li>
+          <li><span class="sw dashed" style="border-color:var(--c-um)"></span>Motor output (u after lag)</li>
         </ul>
       </figcaption>
       <canvas id="cv-u"></canvas>
@@ -641,9 +642,9 @@ const PARAMS = [
   { key: "b0", label: '<span class="sym">b</span><sub>0</sub> <span class="hint">estimated gain</span>',
     min: 500, max: 10000, step: 0.1, def: 3000, num: true, group: "tuning",
     note: "Real plant gain (<i>b</i><sub>real</sub>) is fixed at 3000." },
-  { key: "noise", label: "Gyro noise",            min: 0, max: 50,   step: 0.1,  def: 20,  num: false, group: "conditions" },
+  { key: "noise", label: "Gyro noise",            min: 0, max: 50,   step: 0.1,  def: 0,   num: false, group: "conditions" },
   { key: "dist",  label: "Disturbance amplitude", min: 0, max: 1e6,  step: 1000, def: 2e5, num: false, group: "conditions" },
-  { key: "motor", label: "Motor lag",             min: 0, max: 15,   step: 0.05, def: 2,   num: false, group: "conditions" },
+  { key: "motor", label: "Motor lag",             min: 0, max: 15,   step: 0.05, def: 0,   num: false, group: "conditions" },
 ];
 
 const state = {};
@@ -754,7 +755,7 @@ function render() {
   };
 
   drawPlot(cv.main, {
-    xlim: [T_START, T_END], ylim: autoLim([Y, REF]), ylabel: "Rate (deg/s)",
+    xlim: [T_START, T_END], ylim: autoLim([Y, REF]), ylabel: "Rate (deg/s)", xlabel: "Time (s)",
     vlines: [{ x: DIST_START, color: c.dist }],
     series: [
       { y: Y, color: c.y },
@@ -762,7 +763,7 @@ function render() {
     ],
   });
   drawPlot(cv.zoom, {
-    xlim: [T_START, 0.5], ylim: zoomLim(Y, Z1, T_START, 0.5, true), ylabel: "Rate (deg/s)",
+    xlim: [T_START, 0.5], ylim: zoomLim(Y, Z1, T_START, 0.5, true), ylabel: "Rate (deg/s)", xlabel: "Time (s)",
     series: [
       { y: Y, color: c.y },
       { y: Z1, color: c.z1, width: 1.3 },
@@ -771,6 +772,7 @@ function render() {
   });
   drawPlot(cv.dzoom, {
     xlim: [DIST_START - 0.02, DIST_START + 0.5], ylim: zoomLim(Y, Z1, DIST_START - 0.02, DIST_START + 0.5, false),
+    ylabel: "Rate (deg/s)", xlabel: "Time (s)",
     series: [
       { y: Y, color: c.y },
       { y: Z1, color: c.z1, width: 1.3 },
@@ -778,10 +780,10 @@ function render() {
     ],
   });
   drawPlot(cv.u, {
-    xlim: [T_START, T_END], ylim: autoLim([U, UM]), ylabel: "u", xlabel: "Time (s)",
+    xlim: [T_START, T_END], ylim: autoLim([U, UM]), ylabel: "Control effort (u)", xlabel: "Time (s)",
     series: [
       { y: U, color: c.u, width: 0.9 },
-      { y: UM, color: c.um, width: 1.3 },
+      { y: UM, color: c.um, width: 1.6, dash: [7, 3] },
     ],
   });
 
