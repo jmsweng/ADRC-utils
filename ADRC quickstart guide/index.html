@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADRC tuning sandbox</title>
+<meta name="description" content="Interactive step-response simulator for building intuition about ADRC tuning.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #edf1f4;
+    --panel: #ffffff;
+    --ink: #1b2733;
+    --muted: #5a6b7b;
+    --rule: #c9d3dc;
+    --grid: #e3e9ee;
+    --accent: #1f5fd1;
+    /* trace colours (kept the same as the Python version) */
+    /* Okabe-Ito colour-blind safe palette; line dashes also differ */
+    --c-y: #0072b2;    /* blue */
+    --c-ref: #444c53;  /* neutral grey, dashed */
+    --c-z1: #e69f00;   /* orange */
+    --c-u: #009e73;    /* bluish green */
+    --c-um: #cc79a7;   /* reddish purple */
+    --c-dist: #8795a3;
+    --warn-ink: #8f1d1d;
+    --warn-bg: #fdecec;
+
+    --body: "Barlow", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --head: "Barlow Semi Condensed", "Barlow", "Arial Narrow", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #121a22;
+      --panel: #18222c;
+      --ink: #e3eaf0;
+      --muted: #93a3b2;
+      --rule: #2c3a47;
+      --grid: #223040;
+      --accent: #6fa0ff;
+      --c-y: #56b4e9;
+      --c-ref: #b7c2cc;
+      --c-z1: #e69f00;
+      --c-u: #35c79a;
+      --c-um: #e79ac0;
+      --c-dist: #7c8b99;
+      --warn-ink: #ffb4ab;
+      --warn-bg: #3a1a1a;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.45;
+    font-variant-numeric: tabular-nums;
+  }
+
+  header {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 28px 24px 8px;
+  }
+  h1 {
+    font-family: var(--head);
+    font-weight: 600;
+    font-size: 2rem;
+    line-height: 1.1;
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+  header p {
+    margin: 0;
+    color: var(--muted);
+  }
+
+  .layout {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 16px 24px 32px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: 24px;
+    align-items: start;
+  }
+
+  /* ---------- plots ---------- */
+  .plots { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .zooms { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  figure {
+    margin: 0;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 10px 12px 6px;
+    position: relative;
+    min-width: 0;
+  }
+  figcaption {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 4px 16px;
+    margin-bottom: 4px;
+  }
+  figcaption h2 {
+    font-family: var(--head);
+    font-weight: 600;
+    font-size: 1.05rem;
+    margin: 0;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 14px;
+    font-size: 0.8rem;
+    color: var(--muted);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .legend li { display: flex; align-items: center; gap: 6px; }
+  .sw { display: inline-block; width: 18px; border-top-width: 2px; border-top-style: solid; }
+  .sw.dashed { border-top-style: dashed; }
+  .sw.dotted { border-top-style: dotted; }
+
+  canvas { display: block; width: 100%; }
+  #cv-main { height: 256px; }
+  #cv-zoom, #cv-dzoom { height: 226px; }
+  #cv-u { height: 190px; }
+
+  .banner {
+    position: absolute;
+    left: 50%;
+    top: 55%;
+    transform: translate(-50%, -50%);
+    background: var(--warn-bg);
+    color: var(--warn-ink);
+    border: 1px solid currentColor;
+    border-radius: 6px;
+    padding: 8px 16px;
+    text-align: center;
+    font-size: 1.05rem;
+    line-height: 1.3;
+    pointer-events: none;
+  }
+  .banner strong { font-weight: 600; }
+  .banner[hidden] { display: none; }
+
+  .readout {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 14px 18px 14px;
+  }
+  .readout h2 {
+    font-family: var(--head);
+    font-weight: 600;
+    font-size: 1.05rem;
+    margin: 0 0 6px;
+  }
+  .readout dl {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 2px 12px;
+    margin: 0 0 10px;
+  }
+  .readout dt { color: var(--muted); }
+  .readout dd { margin: 0; text-align: right; }
+  .readout .group { font-family: var(--head); font-weight: 600; font-size: 1.05rem; margin: 0 0 4px; }
+  .readout .note { color: var(--muted); font-size: 0.85rem; margin: 0; }
+  .readout .warn { color: var(--warn-ink); font-weight: 600; margin: 0 0 4px; }
+
+  .fixed { color: var(--muted); font-size: 0.85rem; margin: 0; }
+
+  /* ---------- controls ---------- */
+  .side {
+    position: sticky;
+    top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .controls {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 16px 18px 18px;
+  }
+  .controls h2 {
+    font-family: var(--head);
+    font-weight: 600;
+    font-size: 1.05rem;
+    margin: 0 0 10px;
+  }
+  .controls h2:not(:first-child) {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule);
+  }
+  .ctl { margin-bottom: 12px; }
+  .ctl-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 2px;
+  }
+  .ctl label { font-weight: 500; }
+  .ctl .sym { font-style: italic; font-family: "Cambria Math", "Times New Roman", serif; }
+  .ctl .hint { color: var(--muted); font-weight: 400; }
+  .ctl .note { color: var(--muted); font-size: 0.85rem; margin: 0; }
+  input[type="range"] {
+    width: 100%;
+    accent-color: var(--accent);
+    margin: 4px 0 0;
+  }
+  input[type="number"] {
+    width: 6.5em;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 2px 6px;
+  }
+  button {
+    font: inherit;
+    font-weight: 500;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 6px 16px;
+    cursor: pointer;
+    margin-top: 6px;
+  }
+  button:hover { border-color: var(--muted); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- narrow screens ---------- */
+  @media (max-width: 920px) {
+    .layout { grid-template-columns: 1fr; padding: 12px 12px 0; gap: 14px; }
+    header { padding: 20px 12px 4px; }
+    h1 { font-size: 1.6rem; }
+    .zooms { grid-template-columns: 1fr; }
+    #cv-main { height: 200px; }
+    #cv-zoom, #cv-dzoom, #cv-u { height: 180px; }
+    /* keep the controls and metrics pinned to the bottom of the screen
+       while scrolling the plots */
+    .side {
+      top: auto;
+      bottom: 0;
+      max-height: 50vh;
+      overflow-y: auto;
+      gap: 0;
+      background: var(--panel);
+      border: 1px solid var(--rule);
+      border-radius: 6px 6px 0 0;
+      box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.12);
+    }
+    .readout { border: 0; border-top: 1px solid var(--rule); border-radius: 0; padding: 10px 14px; }
+    .readout dl { margin-bottom: 6px; }
+    .controls { border: 0; border-radius: 0; padding: 12px 14px 14px; }
+    .ctl { margin-bottom: 8px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ADRC tuning sandbox</h1>
+  <p>A simulated drone rate loop using active disturbance rejection control (ADRC).
+     Drag the sliders to see how controller bandwidth, observer bandwidth, and the
+     gain estimate change the step response and recovery after an applied disturbance.
+	 An oscillation is injected at t = 2.5s as a disturbance. The simulation is 
+	 qualitative and to build an intuition for how each parameter affects the 
+	 controller, not to predict real flight behaviour, so the conditions are 
+	 deliberately unitless. </p>
+</header>
+
+<main class="layout">
+  <section class="plots" aria-label="Simulation plots">
+
+    <figure>
+      <figcaption>
+        <h2>Step response: full run</h2>
+        <ul class="legend">
+          <li><span class="sw" style="border-color:var(--c-y)"></span>Plant output (y)</li>
+          <li><span class="sw dashed" style="border-color:var(--c-ref)"></span>Reference (r)</li>
+          <li><span class="sw dotted" style="border-color:var(--c-dist)"></span>Disturbance starts</li>
+        </ul>
+      </figcaption>
+      <canvas id="cv-main" aria-label="Rate in degrees per second against time"></canvas>
+      <div class="banner" id="banner" role="status" hidden></div>
+    </figure>
+
+    <div class="zooms">
+      <figure>
+        <figcaption>
+          <h2>Step response: zoom (&minus;0.5 to 0.5 s)</h2>
+          <ul class="legend">
+            <li><span class="sw" style="border-color:var(--c-y)"></span>Plant output (y)</li>
+            <li><span class="sw" style="border-color:var(--c-z1)"></span>ESO estimate (z1)</li>
+            <li><span class="sw dashed" style="border-color:var(--c-ref)"></span>Reference (r)</li>
+          </ul>
+        </figcaption>
+        <canvas id="cv-zoom"></canvas>
+      </figure>
+      <figure>
+        <figcaption>
+          <h2>Disturbance response: zoom (2.5 to 3 s)</h2>
+          <ul class="legend">
+            <li><span class="sw" style="border-color:var(--c-y)"></span>Plant output (y)</li>
+            <li><span class="sw" style="border-color:var(--c-z1)"></span>ESO estimate (z1)</li>
+            <li><span class="sw dashed" style="border-color:var(--c-ref)"></span>Reference (r)</li>
+          </ul>
+        </figcaption>
+        <canvas id="cv-dzoom"></canvas>
+      </figure>
+    </div>
+
+    <figure>
+      <figcaption>
+        <h2>Control effort: full run</h2>
+        <ul class="legend">
+          <li><span class="sw" style="border-color:var(--c-u)"></span>Command (u)</li>
+          <li><span class="sw dashed" style="border-color:var(--c-um)"></span>Motor output (u after lag)</li>
+        </ul>
+      </figcaption>
+      <canvas id="cv-u"></canvas>
+    </figure>
+
+    <p class="fixed" id="fixed"></p>
+  </section>
+
+  <div class="side">
+    <aside class="controls" aria-label="Parameters">
+      <h2>Tuning</h2>
+      <div id="tuning"></div>
+      <h2>Conditions</h2>
+      <div id="conditions"></div>
+      <button type="button" id="reset">Reset to defaults</button>
+    </aside>
+    <section class="readout" id="readout" aria-live="polite" aria-label="Response metrics"></section>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+/* ================================================================
+   Simulation (direct port of the Python version)
+   ================================================================ */
+const DT = 0.001;            // 1 kHz loop
+const T_START = -0.5;        // s, sim starts before the step
+const T_END = 5.0;           // s
+const N = Math.round((T_END - T_START) / DT);
+const idx = t => Math.round((t - T_START) / DT);
+
+const time = new Float64Array(N);
+for (let i = 0; i < N; i++) time[i] = T_START + i * DT;
+
+const R = 500.0;             // step size (deg/s)
+const STEP_IDX = idx(0.0);
+const REF = new Float64Array(N);
+for (let i = STEP_IDX; i < N; i++) REF[i] = R;
+
+const B_REAL = 3000.0;       // real plant input gain (fixed)
+const LPF_HZ = 150.0;        // PT2 gyro low-pass cutoff (fixed)
+const SIGMA_DECAY = 3.0 * 0.1;
+
+// Damped-oscillation disturbance: size set by slider, shape fixed here
+const DIST_START = 2.5, DIST_FREQ = 10.0, DIST_TAU = 0.15;
+const DIST_IDX = idx(DIST_START);
+const DIST_SHAPE = new Float64Array(N);
+for (let i = DIST_IDX; i < N; i++) {
+  const td = time[i] - DIST_START;
+  DIST_SHAPE[i] = Math.exp(-td / DIST_TAU) * Math.sin(2 * Math.PI * DIST_FREQ * td);
+}
+
+// PT2 filter coefficient (two cascaded first-order stages)
+const ALPHA = DT / (DT + 1 / (2 * Math.PI * LPF_HZ));
+
+// Fixed, seeded unit noise so traces don't jump around while dragging
+const UNIT_NOISE = (() => {
+  let s = 42 >>> 0;
+  const rand = () => {           // mulberry32
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const out = new Float64Array(N);
+  for (let i = 0; i < N; i += 2) {  // Box-Muller
+    const u1 = Math.max(rand(), 1e-12), u2 = rand();
+    const r = Math.sqrt(-2 * Math.log(u1));
+    out[i] = r * Math.cos(2 * Math.PI * u2);
+    if (i + 1 < N) out[i + 1] = r * Math.sin(2 * Math.PI * u2);
+  }
+  return out;
+})();
+
+function simulate(wc, wo, b0, noiseStd, distAmp, motorMs) {
+  const beta1 = 3 * wo, beta2 = 3 * wo * wo, beta3 = wo * wo * wo;
+  const kp = wc * wc, kd = 2 * wc;
+  const motorAlpha = DT / (DT + motorMs / 1000);  // 1 when no lag
+
+  let y = 0, dy = 0;               // plant
+  let z1 = 0, z2 = 0, z3 = 0;      // ESO
+  let f1 = 0, f2 = 0;              // PT2 filter
+  let uMotor = 0;
+
+  const Y = new Float64Array(N), Z1 = new Float64Array(N);
+  const U = new Float64Array(N), UM = new Float64Array(N);
+
+  for (let i = 0; i < N; i++) {
+    // 1. control law on observer estimates
+    const u = (kp * (REF[i] - z1) - kd * z2 - z3) / b0;
+
+    // 2. motor lag (ESO still assumes u acts instantly)
+    uMotor += motorAlpha * (u - uMotor);
+
+    // 3. plant: y'' = -y - 0.5 y' + b_real * u_motor + d(t)
+    const ddy = -y - 0.5 * dy + B_REAL * uMotor + distAmp * DIST_SHAPE[i];
+    y += dy * DT;
+    dy += ddy * DT;
+
+    // 4. noisy gyro through PT2 low-pass
+    const yMeas = y + noiseStd * UNIT_NOISE[i];
+    f1 += ALPHA * (yMeas - f1);
+    f2 += ALPHA * (f1 - f2);
+
+    // 5. linear extended state observer
+    const e = z1 - f2;
+    z1 += DT * (z2 - beta1 * e);
+    z2 += DT * (z3 + b0 * u - beta2 * e);
+    z3 = z3 - DT * SIGMA_DECAY * z3 - DT * beta3 * e;
+
+    Y[i] = y; Z1[i] = z1; U[i] = u; UM[i] = uMotor;
+  }
+  return { Y, Z1, U, UM };
+}
+
+/* Step and disturbance metrics, computed on a noise-free run. */
+function metrics(Yfull) {
+  for (let i = 0; i < N; i++) {
+    if (!Number.isFinite(Yfull[i]) || Math.abs(Yfull[i]) > 1e6) return null;
+  }
+  const Y = Yfull.subarray(STEP_IDX, DIST_IDX);
+  let ymax = -Infinity, i10 = -1, i90 = -1, lastOut = -1;
+  for (let i = 0; i < Y.length; i++) {
+    if (Y[i] > ymax) ymax = Y[i];
+    if (i10 < 0 && Y[i] >= 0.1 * R) i10 = i;
+    if (i90 < 0 && Y[i] >= 0.9 * R) i90 = i;
+    if (Math.abs(Y[i] - R) > 0.02 * R) lastOut = i;
+  }
+  const overshoot = Math.max(0, (ymax - R) / R * 100);
+  const rise = (i10 >= 0 && i90 >= 0) ? (i90 - i10) * DT * 1000 : NaN;
+  let settle;
+  if (lastOut === Y.length - 1) settle = "not settled";
+  else settle = `${Math.round(lastOut >= 0 ? lastOut * DT * 1000 : 0)} ms`;
+
+  const Yd = Yfull.subarray(DIST_IDX);
+  let peak = 0, dOut = -1;
+  for (let i = 0; i < Yd.length; i++) {
+    const err = Math.abs(Yd[i] - R);
+    if (err > peak) peak = err;
+    if (err > 0.02 * R) dOut = i;
+  }
+  let recovery;
+  if (dOut < 0) recovery = "0 ms";
+  else if (dOut === Yd.length - 1) recovery = "not recovered";
+  else recovery = `${Math.round(dOut * DT * 1000)} ms`;
+
+  return {
+    overshoot: `${overshoot.toFixed(1)}%`,
+    rise: Number.isFinite(rise) ? `${rise.toFixed(1)} ms` : "n/a",
+    settle, peak: `${peak.toFixed(1)} deg/s`, recovery,
+  };
+}
+
+/* ================================================================
+   Minimal canvas line plotter
+   ================================================================ */
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function niceStep(range, target) {
+  const raw = range / Math.max(target, 1);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / mag;
+  return (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * mag;
+}
+function ticks(lo, hi, target) {
+  const step = niceStep(hi - lo, target);
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) {
+    out.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+  }
+  return { out, step };
+}
+function fmtTick(v, step) {
+  const d = step >= 1 ? 0 : Math.min(6, Math.ceil(-Math.log10(step)));
+  return v.toFixed(d);
+}
+
+function drawPlot(canvas, opt) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const font = `12px ${cssVar("--body")}`;
+  const ink = cssVar("--ink"), muted = cssVar("--muted");
+  const grid = cssVar("--grid"), rule = cssVar("--rule");
+
+  const m = { l: opt.ylabel ? 62 : 50, r: 10, t: 6, b: opt.xlabel ? 36 : 22 };
+  const pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const [x0, x1] = opt.xlim, [y0, y1] = opt.ylim;
+  const X = x => m.l + (x - x0) / (x1 - x0) * pw;
+  const Yp = y => m.t + (1 - (y - y0) / (y1 - y0)) * ph;
+
+  ctx.font = font;
+  ctx.lineWidth = 1;
+
+  // grid + tick labels
+  const xt = ticks(x0, x1, pw / 70), yt = ticks(y0, y1, ph / 40);
+  ctx.strokeStyle = grid;
+  ctx.beginPath();
+  for (const v of xt.out) { const px = Math.round(X(v)) + 0.5; ctx.moveTo(px, m.t); ctx.lineTo(px, m.t + ph); }
+  for (const v of yt.out) { const py = Math.round(Yp(v)) + 0.5; ctx.moveTo(m.l, py); ctx.lineTo(m.l + pw, py); }
+  ctx.stroke();
+
+  ctx.fillStyle = muted;
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (const v of xt.out) ctx.fillText(fmtTick(v, xt.step), X(v), m.t + ph + 5);
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const v of yt.out) ctx.fillText(fmtTick(v, yt.step), m.l - 6, Yp(v));
+
+  if (opt.xlabel) {
+    ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+    ctx.fillText(opt.xlabel, m.l + pw / 2, H - 1);
+  }
+  if (opt.ylabel) {
+    ctx.save();
+    ctx.translate(12, m.t + ph / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(opt.ylabel, 0, 0);
+    ctx.restore();
+  }
+
+  // data, clipped to the plot area
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(m.l, m.t, pw, ph);
+  ctx.clip();
+
+  for (const v of opt.vlines || []) {
+    ctx.strokeStyle = v.color; ctx.lineWidth = 1.5; ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(X(v.x), m.t); ctx.lineTo(X(v.x), m.t + ph); ctx.stroke();
+  }
+
+  const iStart = Math.max(0, idx(x0) - 1), iEnd = Math.min(N, idx(x1) + 2);
+  for (const s of opt.series) {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = s.width || 1.5;
+    ctx.setLineDash(s.dash || []);
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    let pen = false;
+    for (let i = iStart; i < iEnd; i++) {
+      const v = s.y[i];
+      if (!Number.isFinite(v)) { pen = false; continue; }
+      let py = Yp(v);
+      py = Math.max(-1e4, Math.min(1e4, py));  // keep canvas coords sane
+      if (pen) ctx.lineTo(X(time[i]), py); else { ctx.moveTo(X(time[i]), py); pen = true; }
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // frame
+  ctx.setLineDash([]);
+  ctx.strokeStyle = rule; ctx.lineWidth = 1;
+  ctx.strokeRect(m.l + 0.5, m.t + 0.5, pw - 1, ph - 1);
+}
+
+/* ================================================================
+   Axis-range helpers (match the Python behaviour)
+   ================================================================ */
+function range(arrays, i0, i1, extra = []) {
+  let lo = Infinity, hi = -Infinity;
+  for (const a of arrays) for (let i = i0; i < i1; i++) {
+    const v = a[i];
+    if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  }
+  for (const v of extra) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (!Number.isFinite(lo)) { lo = -1; hi = 1; }
+  return [lo, hi];
+}
+function autoLim(arrays, extra = []) {          // matplotlib-style 5% margins
+  let [lo, hi] = range(arrays, 0, N, extra);
+  if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.05;
+  return [lo - pad, hi + pad];
+}
+function zoomLim(Y, Z1, t0, t1, includeZero) {
+  let [lo, hi] = range([Y, Z1], Math.max(idx(t0), 0), Math.min(idx(t1), N), [R]);
+  if (includeZero) lo = Math.min(lo, 0);
+  const margin = Math.max(25, (hi - lo) * 0.08);
+  return [lo - margin, hi + margin];
+}
+
+/* ================================================================
+   Controls
+   ================================================================ */
+const PARAMS = [
+  // key, label html, min, max, step, default, show number, group
+  { key: "wc", label: '<span class="sym">&omega;<sub>c</sub></span> <span class="hint">controller bandwidth</span>',
+    min: 5, max: 400, step: 0.1, def: 80, num: true, group: "tuning" },
+  { key: "wo", label: '<span class="sym">&omega;<sub>o</sub></span> <span class="hint">observer bandwidth</span>',
+    min: 5, max: 400, step: 0.1, def: 90, num: true, group: "tuning" },
+  { key: "b0", label: '<span class="sym">b</span><sub>0</sub> <span class="hint">estimated gain</span>',
+    min: 500, max: 10000, step: 0.1, def: 3000, num: true, group: "tuning",
+    note: "Real plant gain (<i>b</i><sub>real</sub>) is fixed at 3000." },
+  { key: "noise", label: "Gyro noise",            min: 0, max: 50,   step: 0.1,  def: 0,   num: false, group: "conditions" },
+  { key: "dist",  label: "Disturbance amplitude", min: 0, max: 1e6,  step: 1000, def: 2e5, num: false, group: "conditions" },
+  { key: "motor", label: "Motor lag",             min: 0, max: 15,   step: 0.05, def: 0,   num: false, group: "conditions" },
+];
+
+const state = {};
+const els = {};
+const fmt = v => (Math.abs(v) < 1e4 ? v.toFixed(1) : v.toFixed(0));
+
+for (const p of PARAMS) {
+  state[p.key] = p.def;
+  const wrap = document.createElement("div");
+  wrap.className = "ctl";
+  const id = `in-${p.key}`;
+  wrap.innerHTML = `
+    <div class="ctl-head">
+      <label for="${id}">${p.label}</label>
+      ${p.num ? `<input type="number" id="${id}-num" min="${p.min}" max="${p.max}" step="any"
+                  aria-label="${p.key} value">` : ""}
+    </div>
+    <input type="range" id="${id}" min="${p.min}" max="${p.max}" step="${p.step}">
+    ${p.note ? `<p class="note">${p.note}</p>` : ""}`;
+  document.getElementById(p.group).appendChild(wrap);
+
+  const range = wrap.querySelector('input[type="range"]');
+  const num = wrap.querySelector('input[type="number"]');
+  els[p.key] = { range, num };
+
+  range.addEventListener("input", () => {
+    state[p.key] = parseFloat(range.value);
+    if (num) num.value = fmt(state[p.key]);
+    schedule(true);
+  });
+  if (num) {
+    num.addEventListener("change", () => {
+      const v = parseFloat(num.value);
+      if (!Number.isFinite(v)) { num.value = fmt(state[p.key]); return; }
+      state[p.key] = Math.min(p.max, Math.max(p.min, v));
+      syncControl(p.key);
+      schedule(true);
+    });
+    num.addEventListener("keydown", e => { if (e.key === "Enter") num.blur(); });
+  }
+}
+
+function syncControl(key) {
+  els[key].range.value = state[key];
+  if (els[key].num) els[key].num.value = fmt(state[key]);
+}
+PARAMS.forEach(p => syncControl(p.key));
+
+document.getElementById("reset").addEventListener("click", () => {
+  for (const p of PARAMS) { state[p.key] = p.def; syncControl(p.key); }
+  schedule(true);
+});
+
+document.getElementById("fixed").textContent =
+  `Fixed: real plant gain ${B_REAL}, PT2 gyro filter ${LPF_HZ} Hz, ` +
+  `disturbance ${DIST_FREQ} Hz with ${DIST_TAU} s decay starting at ${DIST_START} s.`;
+
+/* ================================================================
+   Update loop
+   ================================================================ */
+const cv = {
+  main: document.getElementById("cv-main"),
+  zoom: document.getElementById("cv-zoom"),
+  dzoom: document.getElementById("cv-dzoom"),
+  u: document.getElementById("cv-u"),
+};
+const banner = document.getElementById("banner");
+const readout = document.getElementById("readout");
+
+let result = null;   // cached display data
+let pending = false, needSim = false;
+
+function schedule(resim) {
+  needSim = needSim || resim;
+  if (pending) return;
+  pending = true;
+  requestAnimationFrame(() => {
+    pending = false;
+    if (needSim) { runSim(); needSim = false; }
+    render();
+  });
+}
+
+function runSim() {
+  const { wc, wo, b0, noise, dist, motor } = state;
+  const sim = simulate(wc, wo, b0, noise, dist, motor);
+
+  // If the loop goes unstable, stop drawing shortly after it blows up
+  let blownAt = -1;
+  for (let i = 0; i < N; i++) {
+    if (!Number.isFinite(sim.Y[i]) || Math.abs(sim.Y[i]) > 10 * R) { blownAt = i; break; }
+  }
+  if (blownAt >= 0) {
+    const cut = blownAt + 50;
+    for (const a of [sim.Y, sim.Z1, sim.U, sim.UM]) a.fill(NaN, Math.min(cut, N));
+  }
+
+  const clean = simulate(wc, wo, b0, 0, dist, motor).Y;
+  result = { ...sim, blownAt, m: metrics(clean) };
+}
+
+function render() {
+  if (!result) return;
+  const { Y, Z1, U, UM, blownAt, m } = result;
+  const c = {
+    y: cssVar("--c-y"), ref: cssVar("--c-ref"), z1: cssVar("--c-z1"),
+    u: cssVar("--c-u"), um: cssVar("--c-um"), dist: cssVar("--c-dist"),
+  };
+
+  drawPlot(cv.main, {
+    xlim: [T_START, T_END], ylim: autoLim([Y, REF]), ylabel: "Rate (deg/s)", xlabel: "Time (s)",
+    vlines: [{ x: DIST_START, color: c.dist }],
+    series: [
+      { y: Y, color: c.y },
+      { y: REF, color: c.ref, dash: [6, 4] },
+    ],
+  });
+  drawPlot(cv.zoom, {
+    xlim: [T_START, 0.5], ylim: zoomLim(Y, Z1, T_START, 0.5, true), ylabel: "Rate (deg/s)", xlabel: "Time (s)",
+    series: [
+      { y: Y, color: c.y },
+      { y: Z1, color: c.z1, width: 1.3 },
+      { y: REF, color: c.ref, dash: [6, 4] },
+    ],
+  });
+  drawPlot(cv.dzoom, {
+    xlim: [DIST_START - 0.02, DIST_START + 0.5], ylim: zoomLim(Y, Z1, DIST_START - 0.02, DIST_START + 0.5, false),
+    ylabel: "Rate (deg/s)", xlabel: "Time (s)",
+    series: [
+      { y: Y, color: c.y },
+      { y: Z1, color: c.z1, width: 1.3 },
+      { y: REF, color: c.ref, dash: [6, 4] },
+    ],
+  });
+  drawPlot(cv.u, {
+    xlim: [T_START, T_END], ylim: autoLim([U, UM]), ylabel: "Control effort (u)", xlabel: "Time (s)",
+    series: [
+      { y: U, color: c.u, width: 0.9 },
+      { y: UM, color: c.um, width: 1.6, dash: [7, 3] },
+    ],
+  });
+
+  if (blownAt >= 0) {
+    banner.innerHTML = `<strong>Unstable: runaway oscillation</strong><br>` +
+      `plot stopped at t = ${time[blownAt].toFixed(2)} s`;
+    banner.hidden = false;
+  } else {
+    banner.hidden = true;
+  }
+
+  if (m) {
+    readout.innerHTML = `
+      <p class="group">Step</p>
+      <dl>
+        <dt>Overshoot</dt><dd>${m.overshoot}</dd>
+        <dt>Rise (10&ndash;90%)</dt><dd>${m.rise}</dd>
+        <dt>Settling (2%)</dt><dd>${m.settle}</dd>
+      </dl>
+      <p class="group">Disturbance</p>
+      <dl>
+        <dt>Peak error</dt><dd>${m.peak}</dd>
+        <dt>Recovery (2%)</dt><dd>${m.recovery}</dd>
+      </dl>
+      <p class="note">Measured on a noise-free run of the same settings.</p>`;
+  } else {
+    readout.innerHTML = `
+      <p class="warn">Unstable: no metrics</p>
+      <p class="note">Try lowering the observer bandwidth or the motor lag, or moving b<sub>0</sub> closer to the real gain.</p>`;
+  }
+}
+
+new ResizeObserver(() => schedule(false)).observe(document.querySelector(".plots"));
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => schedule(false));
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => schedule(false));
+schedule(true);
+</script>
+</body>
+</html>
