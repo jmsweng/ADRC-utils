@@ -71,7 +71,7 @@
 <body>
 <main>
   <h1>ADRC utils</h1>
-  <p class="lede">Tools for tuning ADRC on Betaflight drones. Both run entirely in your browser, with nothing to install.</p>
+  <p class="lede">Tools and documentation for tuning ADRC on drones. Everything here runs in your browser.</p>
 
   <div class="tools">
     <a class="tool" href="ADRC%20demo/">
@@ -80,7 +80,7 @@
         <path id="stepPath"/>
       </svg>
       <h2>ADRC tuning sandbox</h2>
-      <p>An interactive step-response simulator. Drag the sliders to see how controller bandwidth, observer bandwidth and the gain estimate change the response, and build an intuition for what each parameter does.</p>
+      <p>An interactive step-response simulator. Drag sliders around to see how different control parameters influence step response and disturbance recovery. Adjust dynamics such as disturbance magnitude, sensor noise, and motor lag.</p>
       <span class="go">Open the sandbox</span>
     </a>
 
@@ -91,6 +91,16 @@
       <h2>Plant fit</h2>
       <p>Upload a Betaflight blackbox CSV from a chirp flight to identify the roll, pitch and yaw plant and get b0 estimates as a starting point for tuning.</p>
       <span class="go">Open plant fit</span>
+    </a>
+
+    <a class="tool" href="ADRC%20quickstart%20guide/guide.html">
+      <svg class="trace" viewBox="0 0 1000 72" preserveAspectRatio="none" aria-hidden="true">
+        <path class="ref" d="M0,10 L1000,10"/>
+        <path d="M0,28 L620,28 M0,44 L860,44 M0,60 L420,60"/>
+      </svg>
+      <h2>Quickstart guide</h2>
+      <p>Quick setup of ADRC to get flying with an initial tune. Provides an explanation for what each parameter does.</p>
+      <span class="go">Read the guide</span>
     </a>
   </div>
 </main>
