@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADRC utils</title>
+<meta name="description" content="Tools for drone ADRC tuning.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light;
+    --paper: #edf1f4;
+    --panel: #ffffff;
+    --ink: #16222e;
+    --muted: #5b6b7a;
+    --rule: #c9d3dc;
+    --signal: #2356c7;
+    --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font: 16px/1.55 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 1120px; margin: 0 auto; padding: 48px 24px 80px; }
+  h1 {
+    font-size: clamp(2.4rem, 6vw, 3.6rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    margin: 0 0 12px;
+  }
+  .lede { margin: 0; max-width: 62ch; color: var(--muted); font-size: 1.05rem; }
+
+  .tools {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 24px;
+    margin-top: 40px;
+  }
+  .tool {
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border: 1.5px solid var(--rule);
+    border-radius: 14px;
+    padding: 0 28px 28px;
+    color: inherit;
+    text-decoration: none;
+    transition: border-color .15s, transform .15s;
+  }
+  .tool:hover { border-color: var(--signal); transform: translateY(-2px); }
+  .tool:focus-visible { outline: 3px solid var(--signal); outline-offset: 3px; }
+  .trace { display: block; width: 100%; height: 72px; margin-bottom: 8px; }
+  .trace path { fill: none; stroke: var(--signal); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: .85; }
+  .trace .ref { stroke: var(--rule); stroke-dasharray: 6 6; }
+  .tool h2 { font-size: 1.35rem; font-weight: 600; margin: 0 0 6px; }
+  .tool p { margin: 0; color: var(--muted); }
+  .go { margin-top: auto; padding-top: 18px; color: var(--signal); font-weight: 500; }
+  .go::after { content: " →"; }
+
+  @media (prefers-reduced-motion: reduce) { .tool { transition: none; } .tool:hover { transform: none; } }
+  @media (max-width: 600px) { main { padding: 32px 16px 64px; } .tool { padding: 0 18px 22px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>ADRC utils</h1>
+  <p class="lede">Tools for tuning ADRC on Betaflight drones. Both run entirely in your browser, with nothing to install.</p>
+
+  <div class="tools">
+    <a class="tool" href="ADRC%20demo/">
+      <svg class="trace" viewBox="0 0 1000 72" preserveAspectRatio="none" aria-hidden="true">
+        <path class="ref" d="M0,62 L120,62 L120,18 L1000,18"/>
+        <path id="stepPath"/>
+      </svg>
+      <h2>ADRC tuning sandbox</h2>
+      <p>An interactive step-response simulator. Drag the sliders to see how controller bandwidth, observer bandwidth and the gain estimate change the response, and build an intuition for what each parameter does.</p>
+      <span class="go">Open the sandbox</span>
+    </a>
+
+    <a class="tool" href="Plant%20fitting/">
+      <svg class="trace" viewBox="0 0 1000 72" preserveAspectRatio="none" aria-hidden="true">
+        <path id="chirpPath"/>
+      </svg>
+      <h2>Plant fit</h2>
+      <p>Upload a Betaflight blackbox CSV from a chirp flight to identify the roll, pitch and yaw plant and get b0 estimates as a starting point for tuning.</p>
+      <span class="go">Open plant fit</span>
+    </a>
+  </div>
+</main>
+<script>
+  // Decorative traces: a damped step response and a chirp
+  (function () {
+    var step = [], chirp = [];
+    for (var i = 0; i <= 500; i++) {
+      var x = i / 500, X = x * 1000;
+      var y = 62;
+      if (X >= 120) {
+        var t = (X - 120) / 880 * 9;
+        y = 62 - 44 * (1 - Math.exp(-1.1 * t) * (Math.cos(3.2 * t) + 0.34 * Math.sin(3.2 * t)));
+      }
+      step.push(X.toFixed(1) + "," + y.toFixed(2));
+      var ph = 2 * Math.PI * (2 * x + 11 * x * x);
+      chirp.push(X.toFixed(1) + "," + (36 + 26 * (1 - 0.35 * x) * Math.sin(ph)).toFixed(2));
+    }
+    document.getElementById("stepPath").setAttribute("d", "M" + step.join(" L"));
+    document.getElementById("chirpPath").setAttribute("d", "M" + chirp.join(" L"));
+  })();
+</script>
+</body>
+</html>
