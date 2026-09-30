@@ -101,12 +101,12 @@ def ladrc_controller_frf(w, wc, wo, b0, order=2):
         C_r -> setpoint prefilter transfer function
         C_y -> Feedback controler transfer function
     Inputs: w: array of frequencies, wc: Controller bandwidth, wo: Observer bandwidth
-            b0: plant gain, order: system order (defaults to 2nd order)
+            b0: nominal control gain, order: system order (defaults to 2nd order)
             
     order=2 (default): 3-state ESO, u = (wc^2 r - wc^2 z1 - 2 wc z2 - z3)/b0
     order=1          : 2-state ESO, u = (wc (r - z1) - z2)/b0
     '''
-    if order == 2: # Secnod order LADRC
+    if order == 2: # Second order LADRC
         b1, b2, b3 = 3 * wo, 3 * wo ** 2, wo ** 3
         A = np.array([[-b1, 1, 0],
                       [-(wc ** 2 + b2), -2 * wc, 0],
@@ -198,7 +198,7 @@ def fit_plant_frf(f, G, gam, f_lo=0.8, f_hi=15.0, coh_min=0.85, cond=None,
 
     Returns:
     K, a, wm, tau: Identified physical model parameters
-    b0: Gain, used for ADRC parameter tuning (b0 = K * w_m)
+    b0: Nominal control gain, used for ADRC parameter tuning (b0 = K * w_m)
     rms_rel: Fit error
     band, nbins: Mask and count of frequency bins used
     wm_at_bound: Flag to show if wm hit upper bound, actuator is too fast to be resolved
@@ -223,7 +223,7 @@ def fit_plant_frf(f, G, gam, f_lo=0.8, f_hi=15.0, coh_min=0.85, cond=None,
     lo = np.log([1e-2, 1e-3, 10.0, 1e-6])
     hi = np.log([1e7, 50.0, 2000.0, 0.05])
     p0 = np.log([np.abs(Gb[0]) * w[0], 1.0, 60.0, 4e-3]) # Initial guess
-    out = least_squares(res, p0, bounds=(lo, hi)) # Least suares fit
+    out = least_squares(res, p0, bounds=(lo, hi)) # Least squares fit
     p = np.exp(out.x)
     rms = float(np.sqrt(2 * out.cost / band.sum())) # RMS values
     return dict(K=p[0], a=p[1], wm=p[2], tau=p[3], b0=p[0] * p[2],
@@ -526,7 +526,7 @@ def feedback_path_frf(w, hdr, include_dterm=False, extra_delay_samples=1.5,
 
     NOT included: the dynamic notch and RPM notches. Their phase contribution
     depends on where they are tracking at the time, which is not recoverable
-    from the header alone. They add lag near their centre frequencies, so
+    from the header alone. They add lag near their center frequencies, so
     treat the result as still slightly optimistic.
 
     dyn_lpf_at_min: gyro_lowpass_dyn_hz gives a [min, max] sweep. Passing True

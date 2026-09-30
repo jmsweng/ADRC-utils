@@ -17,10 +17,10 @@
     --rule: #c9d3dc;
     --grid: #e3e9ee;
     --accent: #1f5fd1;
-    /* trace colours (kept the same as the Python version) */
-    /* Okabe-Ito colour-blind safe palette; line dashes also differ */
+    /* trace colors (kept the same as the Python version) */
+    /* Okabe-Ito color-blind safe palette; line dashes also differ */
     --c-y: #0072b2;    /* blue */
-    --c-ref: #444c53;  /* neutral grey, dashed */
+    --c-ref: #444c53;  /* neutral gray, dashed */
     --c-z1: #e69f00;   /* orange */
     --c-u: #009e73;    /* bluish green */
     --c-um: #cc79a7;   /* reddish purple */
@@ -282,10 +282,10 @@
   <h1>ADRC tuning sandbox</h1>
   <p>A simulated drone rate loop using active disturbance rejection control (ADRC).
      Drag the sliders to see how controller bandwidth, observer bandwidth, and the
-     gain estimate change the step response and recovery after an applied disturbance.
+     nominal control gain change the step response and recovery after an applied disturbance.
 	 An oscillation is injected at t = 2.5s as a disturbance. The simulation is 
 	 qualitative and to build an intuition for how each parameter affects the 
-	 controller, not to predict real flight behaviour, so the conditions are 
+	 controller, not to predict real flight behavior, so the conditions are 
 	 deliberately unitless. </p>
 </header>
 
@@ -605,7 +605,7 @@ function drawPlot(canvas, opt) {
 }
 
 /* ================================================================
-   Axis-range helpers (match the Python behaviour)
+   Axis-range helpers (match the Python behavior)
    ================================================================ */
 function range(arrays, i0, i1, extra = []) {
   let lo = Infinity, hi = -Infinity;
@@ -639,7 +639,7 @@ const PARAMS = [
     min: 5, max: 400, step: 0.1, def: 80, num: true, group: "tuning" },
   { key: "wo", label: '<span class="sym">&omega;<sub>o</sub></span> <span class="hint">observer bandwidth</span>',
     min: 5, max: 400, step: 0.1, def: 90, num: true, group: "tuning" },
-  { key: "b0", label: '<span class="sym">b</span><sub>0</sub> <span class="hint">estimated gain</span>',
+  { key: "b0", label: '<span class="sym">b</span><sub>0</sub> <span class="hint">nominal control gain</span>',
     min: 500, max: 10000, step: 0.1, def: 3000, num: true, group: "tuning",
     note: "Real plant gain (<i>b</i><sub>real</sub>) is fixed at 3000." },
   { key: "noise", label: "Gyro noise",            min: 0, max: 50,   step: 0.1,  def: 0,   num: false, group: "conditions" },

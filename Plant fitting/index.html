@@ -146,7 +146,7 @@
 <main>
   <header>
     <h1>Plant fit</h1>
-    <p>Identify the roll, pitch and yaw plant from a Betaflight blackbox log and get b0 estimates for ADRC tuning. Everything runs in this browser tab.</p>
+    <p>Identify the roll, pitch and yaw plant from a Betaflight blackbox log and get nominal control gain (b0) estimates for ADRC tuning. Everything runs in this browser tab.</p>
     <p class="header-note">The Python packages take a little while to load when the page first opens, so wait for the status below to say it's ready before dropping in a file.</p>
   </header>
 
@@ -170,7 +170,7 @@
     <a class="figure" id="figLink" target="_blank" rel="noopener"><img id="figImg" alt="Recovered plant magnitude and model fits for roll, pitch and yaw"></a>
     <p class="hint">Check that the fitted lines follow the recovered data. If the fits look nonsensical, the numbers below will be too. Select the plot to open it full size.</p>
 
-    <h3>b0 (deg/s per u) by method</h3>
+    <h3>Nominal control gain, b0 (deg/s per u), by method</h3>
     <div class="table-wrap"><table id="b0Table"><thead></thead><tbody></tbody></table></div>
 
     <h3>Warnings</h3>
@@ -180,7 +180,7 @@
       <summary>Reading the results</summary>
       <ul>
         <li>Inspect the plant fit plots first. They should look reasonable before you trust any of the numbers.</li>
-        <li>If the methods in the b0 table disagree significantly, use your own judgement about which fit most closely matches the recovered G.</li>
+        <li>If the methods in the b0 table disagree significantly, use your own judgment about which fit most closely matches the recovered G.</li>
         <li>Start tuning with the recovered b0 for each axis from the fit that best matches the recovered data. On a chirp flight this is usually the controller-free fit.</li>
         <li>A “2nd pole above the excited band” warning, most common on yaw, means that axis wasn’t excited enough for a proper fit. Since b0 doesn’t need to be exact, the value can usually still be used without repeating the flight.</li>
       </ul>

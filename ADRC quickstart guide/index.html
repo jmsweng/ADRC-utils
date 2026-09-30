@@ -253,8 +253,8 @@
   <aside class="sidebar">
     <h3>Quickstart guide</h3>
     <ul id="toc">
-      <li><a href="#tldr">TL;DR</a></li>
-      <li><a href="#what-this-is">1. What this is</a></li>
+      <li><a href="#tldr">TL;DR: I just want to get flying</a></li>
+      <li><a href="#what-this-is">1. What is ADRC, and why use it?</a></li>
       <li><a href="#parameters">2. The control parameters</a></li>
       <li class="sub"><a href="#b0">b0 — nominal control gain</a></li>
       <li class="sub"><a href="#wo">wo — observer bandwidth</a></li>
@@ -283,9 +283,9 @@
          different control algorithm.</p>
     </div>
 
-    <h2 id="tldr">TL;DR</h2>
+    <h2 id="tldr">TL;DR: I just want to get flying</h2>
     <ul>
-      <li>ADRC has three parameters: system gain (<code>b0</code>), observer bandwidth
+      <li>ADRC has three parameters: nominal control gain (<code>b0</code>), observer bandwidth
           (<code>wo</code>) and control bandwidth (<code>wc</code>). The <code>b0</code>
           parameter is hardware dependent. The ratio between observer and controller bandwidth
           represents a trade-off between disturbance rejection and control responsiveness.</li>
@@ -315,30 +315,57 @@ set adrc_wo_yaw = 90
 save</code></pre>
       </li>
       <li>If flying with <code>pid_at_min_throttle = ON</code> (Betaflight default), the first
-          time you arm your drone, tap on it a few times with a stick. If it starts oscillating
-          or tries to fly away, <strong>immediately disarm</strong> and set the following
-          parameter in the Betaflight CLI:
-        <pre><code>set adrc_ground_wc = 10</code></pre>
-        <p>Repeat the tap test, and keep reducing this value until the oscillations no longer
-           occur. <strong>DO NOT</strong> set it to 0 if the drone oscillates on the ground, as that disables the
+          time you arm your drone, physically tap on the drone a few times using a stick. If it
+          starts hopping, lifting, or tries to fly away, <strong>immediately disarm</strong> and
+          reduce <code>adrc_ground_wc</code> to a lower value (the default is 10) using the
+          Betaflight CLI:
+        <pre><code>set adrc_ground_wc = &lt;lower_value&gt;</code></pre>
+        <p>Repeat the tap test, and keep reducing this value until the drone no longer hops or
+           lifts. <strong>DO NOT</strong> set it to 0 if the drone bounces on the ground, as that disables the
            oscillation prevention entirely.</p>
       </li>
     </ul>
 
-    <h2 id="what-this-is">1. What this is</h2>
-    <p>This is an experimental feature which includes active disturbance rejection control as an
-       alternative to PID control. This replaces the PID loop with a fundamentally different
-       control algorithm. Instead of relying on static parameters or complicated aerodynamic
-       models, ADRC attempts to continuously estimate and correct for all external forces and
-       internal dynamics of the drone in real time. External forces include things like wind and
-       aerodynamic drag, while internal dynamics include things like frame flex, battery voltage
-       sag, shifting centre of gravity, and unexpected propeller damage. It does this by lumping
-       all these into a single fictitious force called &ldquo;disturbance&rdquo; rather than
-       attempting to construct a physically meaningful model for each force.</p>
-    <p>This can interact in unexpected ways with some of the default filters. It is recommended to
-       disable any filters that are not directly related to something physical on the drone:
-       disable everything in the filters setting tab other than the gyro RPM filter and any notch
-       filters that have been previously set to account for a frame resonance.</p>
+    <h2 id="what-this-is">1. What is ADRC, and why use it?</h2>
+    <p>ADRC is an experimental, optional, complete replacement for PID. Instead of relying on
+       static parameters or complicated aerodynamic models, it continuously estimates everything
+       that is pushing on your quad and cancels it out in real time. External forces include
+       things like wind, drag, and prop wash, while internal dynamics include things like frame
+       flex, battery voltage sag, a shifting center of gravity, and unexpected propeller damage.
+       ADRC lumps all of these into a single fictitious force called &ldquo;disturbance&rdquo;
+       rather than trying to model each one separately. Because the controller is always adjusting
+       for these forces, there are a few practical benefits:</p>
+    <ul>
+      <li><strong>Fewer re-tunes.</strong> With PID, changes like mounting a heavy camera on top,
+          carrying an unbalanced load, or swapping propellers usually means retuning.
+          With ADRC, the drone handles the same way as long as your motors have enough power to
+          make up the difference. Once it is tuned, it generally never needs re-tuning unless you
+          make a very major hardware change.</li>
+      <li><strong>Better resistance to being knocked off course.</strong> A sudden gust or a bump
+          is corrected automatically, so the pilot never has to respond. There
+          are limits: the motors still need enough power, and a tiny whoop can&rsquo;t fly in a
+          hurricane. It will just be noticeably harder to push around. This is probably most useful
+          for something like a cinematic drone, where smooth flight matters most.</li>
+      <li><strong>Forgiveness when things go wrong.</strong> ADRC compensates for basically
+          anything that makes the drone behave differently than expected. A crash that snaps off
+          part of a propeller blade can still fly normally. This has happened a couple of times in
+          testing, and the damage wasn&rsquo;t noticed until the drone was close enough to hear.</li>
+    </ul>
+    <p><strong>Simpler tuning.</strong> The tuning parameters are also a little easier to
+       understand than PID&rsquo;s. The main one is a physical value specific to your drone,
+       essentially its acceleration on each axis. The other two simply control how fast you want
+       the drone to respond.</p>
+    <div class="adm tip">
+      <div class="adm-head">Coming from PID?</div>
+      <p>Early ADRC research describes it as an extension of PID, and you can think of it as a PID
+         controller that constantly re-tunes itself. That is a simplification, but it is a
+         somewhat reasonable way to think about how ADRC works.</p>
+    </div>
+    <p><strong>A note on filters.</strong> ADRC can interact in unexpected ways with some of the
+       default filters. It is recommended to disable any filters that are not directly related to
+       something physical on the drone: disable everything in the filters setting tab other than
+       the gyro RPM filter and any notch filters that have been previously set to account for a
+       frame resonance.</p>
 
     <h2 id="parameters">2. The control parameters</h2>
 
@@ -375,7 +402,7 @@ save</code></pre>
 
     <h3 id="b0-law">adrc_b0_law &mdash; scaling for b0</h3>
     <p>Accepted values: <code>QUADRATIC</code>, <code>LINEAR</code>, <code>SQRT</code>,
-       <code>FIXED</code>.</p>
+       <code>FIXED</code>. Default: <code>SQRT</code>.</p>
     <p>This scales the nominal control gain (<code>b0</code>) based on the throttle. Because thrust
        is slightly nonlinear with throttle, the drone's actual gain varies based on throttle
        position. The optimal scaling law varies depending on the specific hardware configuration.
@@ -410,8 +437,7 @@ save</code></pre>
        basically be a hover with some wobbles commanded on each axis.</p>
 
     <h3 id="step-b0">Calculate b0 values from the recorded baseline flight</h3>
-    <p>Run the recorded blackbox log through the plant-fitting script to determine the system
-       nominal gain (<code>b0</code>). The output of the fitting script includes several plots that
+    <p>Run the recorded blackbox log through the plant-fitting script to determine the nominal control gain (<code>b0</code>). The output of the fitting script includes several plots that
        show the points used for the fit along with the fit. Shown below is an example of a fit
        performed on the baseline flight from a 5&Prime; drone.</p>
 
@@ -473,15 +499,15 @@ save</code></pre>
     <h3 id="step-taptest">Perform ground arm tap test</h3>
     <p>This is only necessary if the control loop is active on the ground (Betaflight default). If
        <code>pid_at_min_throttle = OFF</code> this process is not necessary.</p>
-    <p>In some situations where the gyro sees excessive noise on the ground, a runaway condition can
-       occur on arm if the controller is active on the ground, where noise gets amplified and fed
-       directly to the motors. This mostly occurs on smaller drones. This manifests as the drone
-       rapidly oscillating on the ground and then abruptly flying away when no throttle is
-       commanded. The parameter <code>adrc_ground_wc</code> sets the controller bandwidth to a low
-       value, which prevents this from occurring. By default <code>adrc_ground_wc = 10</code>, which
-       should prevent the flyaway condition.</p>
+    <p>If the control loop is active on the ground, the drone can lift or hop by itself right after
+       arming in airmode. This mostly occurs on smaller drones. It shows up as the drone bouncing
+       or hopping on the ground and then abruptly flying away when no throttle is commanded. The
+       parameter <code>adrc_ground_wc</code> sets the controller bandwidth to a low value while on
+       the ground. It prevents unintended lifting or hopping on arm in airmode, which can lead to
+       a flyaway while the control loop is still closed through ground contact. By default
+       <code>adrc_ground_wc = 10</code>, which should prevent this from occurring.</p>
     <p>To ensure this is not possible on your drone, arm the drone and, when no throttle is
-       commanded, tap on the drone a couple of times (please use a stick). Lifting the back of the
+       commanded, physically tap on the drone a couple of times using a stick. Lifting the back of the
        drone slightly and letting it drop down also works. If the drone starts bouncing on the
        ground during this test, reduce the <code>adrc_ground_wc</code> value until it stops
        occurring.</p>
@@ -520,7 +546,7 @@ save</code></pre>
             <td>Start low and increase gradually until the drone feels crisp but not twitchy.</td>
           </tr>
           <tr>
-            <td>Power estimate (<code>b0</code>)</td>
+            <td>Nominal control gain (<code>b0</code>)</td>
             <td>The controller's guess of how strongly the drone responds to motor changes.</td>
             <td>The controller doesn't request motor power quickly enough, so the drone feels sluggish and soft.</td>
             <td>The controller requests motor power too quickly, so the drone overshoots or oscillates. This causes instability.</td>
@@ -534,7 +560,7 @@ save</code></pre>
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>State / range</th><th>Ratio value (wc / wo)</th><th>Flight behaviour &amp; primary effect</th><th>Potential risks / downsides</th></tr>
+          <tr><th>State / range</th><th>Ratio value (wc / wo)</th><th>Flight behavior &amp; primary effect</th><th>Potential risks / downsides</th></tr>
         </thead>
         <tbody>
           <tr>
@@ -544,7 +570,7 @@ save</code></pre>
           </tr>
           <tr>
             <td>High rejection (conservative)</td><td>&asymp; 0.30 &ndash; 0.50</td>
-            <td>Prioritises rejecting external forces, wind, prop wash, and frame anomalies.</td>
+            <td>Prioritizes rejecting external forces, wind, prop wash, and frame anomalies.</td>
             <td>Slower response to pilot control inputs.</td>
           </tr>
           <tr>
@@ -555,7 +581,7 @@ save</code></pre>
           <tr>
             <td>Too high (marginal)</td><td>&gt; 0.90 &ndash; 0.95</td>
             <td>Extremely reactive, twitchy feel; can feel over-sensitive to stick inputs.</td>
-            <td>Prone to overshoot on aggressive manoeuvres; disturbance rejection becomes sluggish.</td>
+            <td>Prone to overshoot on aggressive maneuvers; disturbance rejection becomes sluggish.</td>
           </tr>
           <tr>
             <td>Critical limit / instability</td><td>&ge; 1.0 (wc &ge; wo)</td>
