@@ -75,6 +75,30 @@
   .drop-sub { margin: 0; color: var(--muted); }
   .browse { color: var(--signal); text-decoration: underline; text-underline-offset: 3px; }
 
+  .settings {
+    margin-top: 32px; background: var(--panel); border: 1px solid var(--rule);
+    border-radius: 14px; padding: 18px 24px;
+  }
+  .settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .settings label { font-weight: 600; }
+  .settings input[type="number"] {
+    width: 7.5em; font: 1rem var(--mono); padding: 6px 10px; color: var(--ink);
+    background: var(--panel); border: 1.5px solid var(--rule); border-radius: 8px;
+  }
+  .settings input[type="number"]:focus-visible { outline: 3px solid var(--signal); outline-offset: 2px; border-color: var(--signal); }
+  .settings input[aria-invalid="true"] { border-color: var(--error); }
+  .settings .unit { color: var(--muted); }
+  .settings .check { font-weight: 400; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; margin-left: auto; }
+  .settings .check input { width: 1.05em; height: 1.05em; accent-color: var(--signal); }
+  .settings button {
+    font: 500 .95rem var(--sans); padding: 7px 14px; border-radius: 8px; cursor: pointer;
+    border: 1.5px solid var(--signal); background: var(--signal-soft); color: var(--signal);
+  }
+  .settings button:disabled { opacity: .5; cursor: progress; }
+  .settings button:focus-visible { outline: 3px solid var(--signal); outline-offset: 2px; }
+  .settings .hint { margin-top: 10px; }
+  .drop { margin-top: 20px; }
+
   .status {
     display: flex; align-items: center; gap: 10px;
     margin-top: 16px; color: var(--muted); font-size: .95rem;
@@ -150,6 +174,17 @@
     <p class="header-note">The Python packages take a little while to load when the page first opens, so wait for the status below to say it's ready before dropping in a file.</p>
   </header>
 
+  <div class="settings">
+    <div class="settings-row">
+      <label for="wcInput">Proposed wc</label>
+      <input type="number" id="wcInput" value="80" min="5" max="1000" step="1" inputmode="decimal" aria-describedby="wcHint">
+      <span class="unit">rad/s</span>
+      <button type="button" id="rerun" hidden>Re-run with this wc</button>
+      <label class="check"><input type="checkbox" id="verbose"> Verbose output</label>
+    </div>
+    <p class="hint" id="wcHint">The wc you plan to fly, applied to all axes. b0 is reported as the value that matches the plant at this wc, so change it here if you change wc and run again.</p>
+  </div>
+
   <label class="drop disabled" id="drop">
     <svg class="chirp" viewBox="0 0 1000 72" preserveAspectRatio="none" aria-hidden="true"><path id="chirpPath"/></svg>
     <input type="file" id="file" accept=".csv,text/csv" disabled>
@@ -170,8 +205,12 @@
     <a class="figure" id="figLink" target="_blank" rel="noopener"><img id="figImg" alt="Recovered plant magnitude and model fits for roll, pitch and yaw"></a>
     <p class="hint">Check that the fitted lines follow the recovered data. If the fits look nonsensical, the numbers below will be too. Select the plot to open it full size.</p>
 
-    <h3>Nominal control gain, b0 (deg/s per u), by method</h3>
+    <h3>Nominal control gain, b0 (deg/s per u), by method<span id="b0Wc"></span></h3>
     <div class="table-wrap"><table id="b0Table"><thead></thead><tbody></tbody></table></div>
+
+    <h3>Motor lag</h3>
+    <div class="table-wrap"><table id="lagTable"><thead></thead><tbody></tbody></table></div>
+    <p class="hint">Fitted on the chirp windows only, over a wider band than b0, as an integrator behind a first-order motor lag plus a transport delay. Motor lag (gyro) is the lag from motor command to gyro; motor lag (eRPM) is the motors' own response, from motor command to rotor speed (needs bidirectional DShot).</p>
 
     <h3>Warnings</h3>
     <div id="warnings"></div>
@@ -182,7 +221,10 @@
         <li>Inspect the plant fit plots first. They should look reasonable before you trust any of the numbers.</li>
         <li>If the methods in the b0 table disagree significantly, use your own judgment about which fit most closely matches the recovered G.</li>
         <li>Start tuning with the recovered b0 for each axis from the fit that best matches the recovered data. On a chirp flight this is usually the controller-free fit.</li>
-        <li>A “2nd pole above the excited band” warning, most common on yaw, means that axis wasn’t excited enough for a proper fit. Since b0 doesn’t need to be exact, the value can usually still be used without repeating the flight.</li>
+        <li>The b0 values are for the proposed wc above. They are not interchangeable between wc values: the same log gives a larger b0 at a higher wc, most of all on yaw. Re-run with the wc you will actually fly.</li>
+        <li>A “2nd pole above the excited band” warning means that axis wasn’t excited enough for a proper fit. Since b0 doesn’t need to be exact, the value can usually still be used without repeating the flight.</li>
+        <li>The two motor lag values should be close; a gap of 1–3 ms is normal and doesn’t matter for tuning. If the gyro value is shorter, use the eRPM value, since the gyro fit can mix up lag and delay. If the gyro value is clearly longer, use the gyro value: the extra lag is real (gyro filtering, frame or props) and eRPM can’t see it.</li>
+        <li>Yaw is fitted with an extra zero from rotor reaction torque, which makes it close to first order around wc. Its b0 therefore scales with wc: re-fit it whenever you change yaw wc. The “yaw HF gain” column (shown with Verbose output) is the number that doesn’t move with wc.</li>
       </ul>
     </details>
   </section>
@@ -249,10 +291,9 @@ if _stubbed:
     del sys.modules["IPython"], sys.modules["IPython.display"]
 plant_fit.display = lambda *a, **k: None   # tables are rendered from the returned DataFrames
 
-# Same settings as the notebook. The true/false toggles stay off.
-WC = {"roll": 40,   "pitch": 40,   "yaw": 40}
-WO = {"roll": 100,  "pitch": 100,  "yaw": 100}
-B0 = {"roll": 5000, "pitch": 5000, "yaw": 5000}
+# Same settings as the notebook. The true/false toggles stay off. The log is
+# not assumed to be flown with ADRC, so no flown wc/wo/b0 are needed; the
+# proposed wc comes from the page.
 ADRC_FLIGHT = False
 SUGGEST_WC = False
 SAVE_OUTPUTS = False
@@ -270,7 +311,8 @@ def _capture_show(*args, **kwargs):
 plt.show = _capture_show
 
 
-def run_fit(csv_path):
+def run_fit(csv_path, wc_proposed=80.0):
+    wc_proposed = float(wc_proposed)
     _figures.clear()
     plt.close("all")
     cap = io.StringIO()
@@ -280,10 +322,11 @@ def run_fit(csv_path):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            _, b0_table, _ = plant_fit.show_fit_summary(
-                csv_path, WC, WO, B0, f_hi=F_HI, coh_min=COH_MIN,
+            results, b0_table, _ = plant_fit.show_fit_summary(
+                csv_path, f_hi=F_HI, coh_min=COH_MIN,
                 adrc_flight=ADRC_FLIGHT, suggest_wc=SUGGEST_WC,
-                save_outputs=SAVE_OUTPUTS)
+                save_outputs=SAVE_OUTPUTS, wc_proposed=wc_proposed,
+                verbose=True)   # all columns; the page hides the detail ones
     finally:
         sys.stdout, sys.__stdout__ = old_out, old_dunder
         plt.close("all")
@@ -293,10 +336,16 @@ def run_fit(csv_path):
     summary_warnings = [ln for ln in lines if ln.startswith("[WARNING:")]
     log = "\n".join(ln for ln in lines
                     if not ln.startswith("[WARNING:") and ln.strip() != "No warnings.").strip()
+    # wc*(tau+d) at the proposed wc; no wo*tau, since no wo is entered
+    lag_table = plant_fit.motor_lag_table(results, wc=wc_proposed)
     return {
         "figures": list(_figures),
+        "verbose_columns": list(plant_fit.VERBOSE_COLUMNS),
+        "wc_label": plant_fit.wc_label(wc_proposed),
         "columns": [str(c) for c in b0_table.columns],
         "rows": [[str(v) for v in row] for row in b0_table.itertuples(index=False)],
+        "lag_columns": [str(c) for c in lag_table.columns],
+        "lag_rows": [[str(v) for v in row] for row in lag_table.itertuples(index=False)],
         "warnings": summary_warnings,
         "log": log,
     }
@@ -348,7 +397,7 @@ self.onmessage = async (e) => {
       await ready;
       py.FS.writeFile(path, new Uint8Array(m.bytes));
       const t0 = performance.now();
-      const proxy = py.globals.get("run_fit")(path);
+      const proxy = py.globals.get("run_fit")(path, m.wc);
       const result = proxy.toJs({ dict_converter: Object.fromEntries });
       proxy.destroy();
       self.postMessage({ type: "result", name: m.name, result, seconds: (performance.now() - t0) / 1000 });
@@ -366,7 +415,16 @@ const worker = new Worker(URL.createObjectURL(new Blob([workerSrc], { type: "tex
 
 const $ = (id) => document.getElementById(id);
 const drop = $("drop"), fileInput = $("file"), statusEl = $("status"), statusText = $("statusText");
-let isReady = false, isBusy = false, figUrl = null;
+let isReady = false, isBusy = false, figUrl = null, lastFile = null;
+const wcInput = $("wcInput"), rerunBtn = $("rerun");
+
+// Proposed wc from the input, or null (with the field marked) if it isn't usable
+function readWc() {
+  const v = Number(wcInput.value);
+  const ok = wcInput.value.trim() !== "" && Number.isFinite(v) && v >= 5 && v <= 1000;
+  wcInput.setAttribute("aria-invalid", ok ? "false" : "true");
+  return ok ? v : null;
+}
 
 function setStatus(state, text) { statusEl.dataset.state = state; statusText.textContent = text; }
 function setBusy(b) {
@@ -374,6 +432,7 @@ function setBusy(b) {
   drop.classList.toggle("busy", b);
   drop.classList.toggle("disabled", b || !isReady);
   fileInput.disabled = b || !isReady;
+  rerunBtn.disabled = b || !isReady;
 }
 
 function showError(summary, detail) {
@@ -443,13 +502,43 @@ async function runFile(file) {
     showError(`${file.name} is not a CSV. Export the blackbox log to CSV and try again.`);
     return;
   }
+  const wc = readWc();
+  if (wc === null) {
+    showError("Enter a proposed wc between 5 and 1000 rad/s.");
+    wcInput.focus();
+    return;
+  }
+  lastFile = file;
   $("error").hidden = true;
   $("results").hidden = true;
   setBusy(true);
-  setStatus("running", `Running the fit on ${file.name}…`);
+  setStatus("running", `Running the fit on ${file.name} at wc = ${wc} rad/s…`);
   const bytes = await file.arrayBuffer();
   const safeName = file.name.replace(/[\\/]/g, "_");
-  worker.postMessage({ type: "run", name: safeName, bytes }, [bytes]);
+  worker.postMessage({ type: "run", name: safeName, bytes, wc }, [bytes]);
+}
+
+// Fill a table, leaving out the `hide` columns
+function fillTable(id, columns, rows, hide = []) {
+  const keep = columns.map((c, i) => hide.includes(c) ? -1 : i).filter(i => i >= 0);
+  const thead = $(id).tHead, tbody = $(id).tBodies[0];
+  thead.replaceChildren(); tbody.replaceChildren();
+  const hr = thead.insertRow();
+  for (const i of keep) { const th = document.createElement("th"); th.textContent = columns[i]; hr.append(th); }
+  for (const row of rows) {
+    const tr = tbody.insertRow();
+    for (const i of keep) tr.insertCell().textContent = row[i];
+  }
+}
+
+// Tables, with the detail columns hidden unless "Verbose output" is ticked
+let lastResult = null;
+function fillTables() {
+  const r = lastResult;
+  if (!r) return;
+  const hide = $("verbose").checked ? [] : (r.verbose_columns || []);
+  fillTable("b0Table", r.columns, r.rows, hide);
+  fillTable("lagTable", r.lag_columns, r.lag_rows, hide);
 }
 
 function render(name, r) {
@@ -462,14 +551,10 @@ function render(name, r) {
   $("figImg").src = figUrl;
   $("figLink").href = figUrl;
 
-  const thead = $("b0Table").tHead, tbody = $("b0Table").tBodies[0];
-  thead.replaceChildren(); tbody.replaceChildren();
-  const hr = thead.insertRow();
-  for (const c of r.columns) { const th = document.createElement("th"); th.textContent = c; hr.append(th); }
-  for (const row of r.rows) {
-    const tr = tbody.insertRow();
-    for (const v of row) tr.insertCell().textContent = v;
-  }
+  $("b0Wc").textContent = ` at wc = ${r.wc_label}`;
+  rerunBtn.hidden = false;
+  lastResult = r;
+  fillTables();
 
   const w = $("warnings");
   w.replaceChildren();
@@ -496,6 +581,10 @@ function render(name, r) {
 }
 
 fileInput.addEventListener("change", () => { runFile(fileInput.files[0]); fileInput.value = ""; });
+wcInput.addEventListener("input", () => readWc());
+rerunBtn.addEventListener("click", () => runFile(lastFile));
+$("verbose").addEventListener("change", fillTables);
+wcInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && lastFile) runFile(lastFile); });
 ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => {
   e.preventDefault();
   if (isReady && !isBusy) drop.classList.add("over");

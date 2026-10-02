@@ -181,14 +181,19 @@ def plant_model_frf(w, p):
     '''
     Frequency response function of a second order plant
     Transfer function: G(s) = K * exp(-s*tau) / ((s + a) * (s/wm + 1))
+    With a 5th parameter (zero), the yaw form with a lead zero:
+                       G(s) = K * (1 + s/zero) * exp(-s*tau) / ((s + a) * (s/wm + 1))
     Used for model fitting
     '''
-    K, a, wm, tau = p 
+    K, a, wm, tau = p[:4]
     s = 1j * w
-    return K * np.exp(-s * tau) / ((s + a) * (s / wm + 1))
+    G = K * np.exp(-s * tau) / ((s + a) * (s / wm + 1))
+    if len(p) > 4:
+        G = G * (1 + s / p[4])
+    return G
 
 def fit_plant_frf(f, G, gam, f_lo=0.8, f_hi=15.0, coh_min=0.85, cond=None,
-                  cond_min=0.05):
+                  cond_min=0.05, lead=False):
     '''
     Complex least squares of the rate-plant model to G(jw), over the band
     where the setpoint actually excites craft
@@ -203,6 +208,18 @@ def fit_plant_frf(f, G, gam, f_lo=0.8, f_hi=15.0, coh_min=0.85, cond=None,
     band, nbins: Mask and count of frequency bins used
     wm_at_bound: Flag to show if wm hit upper bound, actuator is too fast to be resolved
     cov_log: Covariance matrix
+
+    lead=True fits the yaw form with a lead zero (see plant_model_frf). Yaw
+    torque is rotor drag (proportional to w^2, so it comes through the motor
+    lag) PLUS the reaction torque from spinning the rotors up and down
+    (proportional to dw/dt, so it arrives as fast as the motor responds). The
+    second term puts a zero in the plant, at the ratio of the two, typically
+    a few rad/s. Above that zero the yaw plant is close to K_hf/s -- a FIRST-
+    order plant -- and the no-zero model cannot represent it: it bends 'a'
+    and 'wm' to fake the flat |G|*w, wm lands on its bound, and the fit error
+    is ~4x worse. Also returns b_hf = K*wm/zero, the high-frequency gain
+    (the |G|*w plateau), which is the wc-independent yaw gain and the b0 a
+    1st-order LADRC would use.
     '''
     # Create mask, filter by frequency band, coherence, remove any NaN or Inf
     band = (f >= f_lo) & (f <= f_hi) & (gam >= coh_min) & np.isfinite(G) 
@@ -223,14 +240,45 @@ def fit_plant_frf(f, G, gam, f_lo=0.8, f_hi=15.0, coh_min=0.85, cond=None,
     lo = np.log([1e-2, 1e-3, 10.0, 1e-6])
     hi = np.log([1e7, 50.0, 2000.0, 0.05])
     p0 = np.log([np.abs(Gb[0]) * w[0], 1.0, 60.0, 4e-3]) # Initial guess
-    out = least_squares(res, p0, bounds=(lo, hi)) # Least squares fit
+    if not lead:
+        out = least_squares(res, p0, bounds=(lo, hi)) # Least squares fit
+    else:
+        # zero bounded to 0.5-500 rad/s; multi-start on it, since the zero
+        # and the 'a' pole can trade off from a poor start
+        lo, hi = np.r_[lo, np.log(0.5)], np.r_[hi, np.log(500.0)]
+        out = min((least_squares(res, np.r_[p0, np.log(z0)], bounds=(lo, hi))
+                   for z0 in (3.0, 10.0, 30.0)), key=lambda o: o.cost)
     p = np.exp(out.x)
     rms = float(np.sqrt(2 * out.cost / band.sum())) # RMS values
+    zero = float(p[4]) if lead else None
     return dict(K=p[0], a=p[1], wm=p[2], tau=p[3], b0=p[0] * p[2],
+                zero=zero, b_hf=(p[0] * p[2] / zero if lead else float('nan')),
+                param_keys=(('K', 'a', 'wm', 'tau', 'zero') if lead
+                            else ('K', 'a', 'wm', 'tau')),
                 rms_rel=rms, band=band, n_bins=int(band.sum()),
                 f_valid_hz=float(f[band].max()),
                 wm_at_bound=bool(p[2] > 0.99 * 2000.0),
                 logp=out.x.copy(), cov_log=_cov_from_jac(out, lo, hi))
+
+def hf_gain(fit):
+    '''
+    High-frequency gain K_hf = lim |G(jw)|*w of a fit with a lead zero
+    (yaw), in deg/s^2 per unit u. For the closed-loop fits K*wm/zero; for the
+    eRPM fit k_a*pole/zero. nan for fits without a zero.
+    '''
+    z = fit.get('zero')
+    if not z:
+        return float('nan')
+    return float(fit['K'] * fit['wm'] / z)
+
+def hf_gain_uncertainty(fit, n=400, seed=0):
+    '''(K_hf, 1-sigma) from the fitted parameter covariance.'''
+    central = hf_gain(fit)
+    if central != central:
+        return central, float('nan')
+    vals = np.array([hf_gain(d) for d in sample_fits(fit, n=n, seed=seed)])
+    vals = vals[np.isfinite(vals)]
+    return central, (float(np.std(vals)) if len(vals) > 8 else float('nan'))
 
 def _cov_from_jac(out, lo=None, hi=None, tol=1e-6):
     '''
@@ -310,7 +358,9 @@ def plant_tf(fit):
     scipy TransferFunction for the fitted plant (delay not included).
     '''
     K, a, wm = fit['K'], fit['a'], fit['wm']
-    return TransferFunction([K * wm], [1, a + wm, a * wm])
+    z = fit.get('zero')
+    num = [K * wm / z, K * wm] if z else [K * wm]
+    return TransferFunction(num, [1, a + wm, a * wm])
 
 
 def plant_time_responses(fit, t_end=0.5, n=800):
@@ -481,6 +531,338 @@ def b0_effective(fit, wc):
     b0 evaluated as b0_eff = wc^2 * |G(j*wc)|.
     '''
     return float(wc ** 2 * np.abs(plant_frf_from_fit(fit, [wc])[0]))
+
+# Motor lag
+#
+# The rate plant on roll/pitch is an integrator behind one first-order motor
+# lag plus a small transport delay (ADRC_MATH_REVIEW.md, sections 2 and 2c):
+#
+#     G(s) = b_acc * exp(-s*d) / ( s * (1 + s*tau) )
+#
+# tau is the motor lag. Its corner, 1/(2*pi*tau), is ~8 Hz for a 20 ms motor,
+# so it can only be told apart from the delay d when the fit band reaches well
+# past that corner (the delay's phase keeps growing with frequency, the lag's
+# levels off at -90 deg). The b0 fits above stop at f_hi = 15 Hz, which is why
+# their 1/wm does not give the lag: the data trades tau against the delay
+# along a ridge. A chirp flight stays coherent out to ~60 Hz, but only inside
+# the chirp windows -- the rest of the log adds response with no setpoint
+# energy behind it and drags the coherence down -- so the lag is fitted on
+# those windows only.
+
+BOXCHIRP_BIT = 6   # rc_modes.h: BOXARM=0, BOXANGLE, BOXHORIZON, BOXMAG,
+                   # BOXALTHOLD, BOXHEADFREE, BOXCHIRP. Blackbox logs the
+                   # rcModeActivationMask as 'flightModeFlags'.
+
+def _filled(df, col):
+    '''Column as float array with gaps (partial frames) filled from neighbours.'''
+    return df[col].astype(float).ffill().bfill().to_numpy()
+
+def find_excitation_segments(df, min_len_s=3.0, min_rms=5.0, share=0.3):
+    '''
+    Sample-index windows to identify each axis over, as
+    ({axis: [(i0, i1), ...]}, source).
+
+    Uses the chirp windows when the log has them (CHIRP mode bit set in
+    flightModeFlags). Each window is assigned to every axis whose setpoint RMS
+    in it is at least min_rms deg/s and at least `share` of the largest axis --
+    upstream chirps one axis per window, but this also handles simultaneous
+    ones. Falls back to the whole log for every axis (source 'whole log') when
+    there are no chirp windows; stick moves carry little energy above ~5 Hz,
+    so the lag is then poorly separated from the delay.
+    '''
+    t = _filled(df, 'time') * 1e-6
+    fs = 1.0 / np.median(np.diff(t))
+    whole = {a: [(0, len(df))] for a in AXIS_NAMES}
+    if 'flightModeFlags' not in df.columns:
+        return whole, 'whole log'
+    fm = df['flightModeFlags']
+    if fm.dtype == object:     # some decoders write mode names, not the mask
+        on = fm.astype(str).str.upper().str.contains('CHIRP').to_numpy()
+    else:
+        v = fm.ffill().fillna(0).to_numpy().astype(np.int64)
+        on = ((v >> BOXCHIRP_BIT) & 1).astype(bool)
+    d = np.diff(np.r_[0, on.astype(int), 0])
+    starts, ends = np.where(d == 1)[0], np.where(d == -1)[0]
+    segs = {a: [] for a in AXIS_NAMES}
+    for i0, i1 in zip(starts, ends):
+        if (i1 - i0) / fs < min_len_s:
+            continue
+        rms = np.array([np.std(_filled(df, f'setpoint[{k}]')[i0:i1]) for k in range(3)])
+        for k, a in enumerate(AXIS_NAMES):
+            if rms[k] >= min_rms and rms[k] >= share * rms.max():
+                segs[a].append((int(i0), int(i1)))
+    if not any(segs.values()):
+        return whole, 'whole log'
+    # An axis that was never chirped falls back to the whole log on its own.
+    src = {a: ('chirp' if segs[a] else 'whole log') for a in AXIS_NAMES}
+    for a in AXIS_NAMES:
+        if not segs[a]:
+            segs[a] = whole[a]
+    return segs, src
+
+def _pooled_spectra(segs, r, outs, fs, nperseg, overlap=0.75):
+    '''
+    Welch auto/cross spectra pooled over several windows, weighted by the
+    number of averages each contributes. r is the instrument (exogenous
+    setpoint); outs is {name: signal}.
+    Returns f, Srr, {name: (S_rx, S_xx)}, n_averages.
+    '''
+    lens = [b - a for a, b in segs]
+    nps = int(min(nperseg, 2 ** int(np.floor(np.log2(max(min(lens) / 2, 64))))))
+    nov = int(nps * overlap)
+    acc, wsum, f = None, 0.0, None
+    for a, b in segs:
+        if b - a < nps:
+            continue
+        nav = 1 + (b - a - nps) // (nps - nov)
+        f, Srr = welch(r[a:b], fs, nperseg=nps, noverlap=nov, detrend='linear')
+        cur = {'_rr': Srr}
+        for k, x in outs.items():
+            _, Srx = csd(r[a:b], x[a:b], fs, nperseg=nps, noverlap=nov, detrend='linear')
+            _, Sxx = welch(x[a:b], fs, nperseg=nps, noverlap=nov, detrend='linear')
+            cur[k] = (Srx, Sxx)
+        if acc is None:
+            acc = {k: (v * nav if k == '_rr' else (v[0] * nav, v[1] * nav))
+                   for k, v in cur.items()}
+        else:
+            for k, v in cur.items():
+                acc[k] = (acc[k] + v * nav if k == '_rr'
+                          else (acc[k][0] + v[0] * nav, acc[k][1] + v[1] * nav))
+        wsum += nav
+    if acc is None:
+        raise ValueError("no excitation window is long enough for one Welch segment")
+    Srr = acc.pop('_rr') / wsum
+    return f, Srr, {k: (v[0] / wsum, v[1] / wsum) for k, v in acc.items()}, int(wsum), nps
+
+def _fit_lag(f, H, coh, f_lo, f_hi, coh_min, integrator=True, lead=False):
+    '''
+    Complex least squares of
+        k * (1 + s*Tz)^lead * exp(-s*d) / ( s^integrator * (1 + s*tau) )
+    to H over the coherent band. Relative error, weighted by sqrt(coherence).
+    Multi-start, because tau and d trade off and a single start can land on
+    the wrong side of the ridge.
+    '''
+    band = (f >= f_lo) & (f <= f_hi) & (coh >= coh_min) & np.isfinite(H) & (np.abs(H) > 0)
+    if band.sum() < 8:
+        raise ValueError(f"only {band.sum()} coherent bins between {f_lo}-{f_hi} Hz")
+    w = 2 * np.pi * f[band]
+    Hb = H[band]
+    wgt = np.sqrt(coh[band])
+    s = 1j * w
+
+    def model(p):
+        g = p[0] * np.exp(-s * p[2]) / (1 + s * p[1])
+        if integrator:
+            g = g / s
+        if lead:
+            g = g * (1 + s * p[3])
+        return g
+
+    def res(lp):
+        e = (model(np.exp(lp)) - Hb) / np.abs(Hb) * wgt
+        return np.concatenate([e.real, e.imag])
+
+    k0 = float(np.median(np.abs(Hb) * (w if integrator else 1.0)))
+    lo = [1e-6, 1e-4, 1e-5] + ([1e-4] if lead else [])
+    hi = [1e9, 0.3, 0.05] + ([2.0] if lead else [])
+    lo_l, hi_l = np.log(lo), np.log(hi)
+    best = None
+    for tau0 in (0.005, 0.02, 0.05):
+        for d0 in (5e-4, 3e-3):
+            for tz0 in ((0.02, 0.15) if lead else (None,)):
+                p0 = [k0 * (1 + 2 * np.pi * 8 * tau0), tau0, d0] + ([tz0] if lead else [])
+                out = least_squares(res, np.clip(np.log(p0), lo_l + 1e-9, hi_l - 1e-9),
+                                    bounds=(lo_l, hi_l))
+                if best is None or out.cost < best.cost:
+                    best = out
+    p = np.exp(best.x)
+    cov = _cov_from_jac(best, lo_l, hi_l)
+    sd = np.sqrt(np.clip(np.diag(cov), 0, None))   # relative, log space
+    return dict(k=float(p[0]), tau=float(p[1]), delay=float(p[2]),
+                Tz=(float(p[3]) if lead else None),
+                tau_sd=float(p[1] * sd[1]), delay_sd=float(p[2] * sd[2]),
+                err=float(np.sqrt(2 * best.cost / band.sum())),
+                n_bins=int(band.sum()), f_lo_hz=float(f[band].min()),
+                f_hi_hz=float(f[band].max()),
+                tau_at_bound=bool(abs(best.x[1] - lo_l[1]) < 1e-6
+                                  or abs(best.x[1] - hi_l[1]) < 1e-6),
+                band=band)
+
+def estimate_motor_lag(df, axis, nperseg=4096, f_lo=1.5, f_hi=60.0, coh_min=0.8,
+                       segments=None, use_rpm=True, motor_poles=12,
+                       erpm_scale=100.0, mixer=None):
+    '''
+    Motor lag tau (seconds) for one axis, with the transport delay fitted
+    alongside it so the two are not confused.
+
+    Primary (gyro) path: controller-free plant H = S_ry / S_ru, with the
+    setpoint r as the instrument (unbiased in closed loop, and independent of
+    the ADRC parameters), fitted to
+        roll/pitch: b_acc * exp(-s d) / (s (1 + s tau))
+        yaw:        b_acc * (1 + s Tz) * exp(-s d) / (s (1 + s tau))
+    Yaw gets the lead zero from rotor reaction torque; without it the yaw fit
+    is wrong (ADRC_MATH_REVIEW.md 2c).
+
+    Check (eRPM) path, if bidirectional DShot is logged: the motors' own
+    response, u -> mixer-weighted rotor speed, fitted to k exp(-s d)/(1 + s tau)
+    with the same instrument and windows. It never sees the airframe, so it is
+    independent of the rigid-body model.
+
+    f_hi defaults to 60 Hz: the lag only separates from the delay well past its
+    corner (~8 Hz for 20 ms). On a chirp log both paths stay coherent that far.
+
+    segments: {axis: [(i0, i1), ...]} sample windows, or None to use the chirp
+    windows from flightModeFlags (whole log if there are none).
+
+    Returns a dict; tau/delay in seconds. b0_lag = b_acc/tau is the ADRC b0
+    this plant implies (roll/pitch only -- it has no meaning on yaw).
+    '''
+    i = AXIS_NAMES.index(axis)
+    t = _filled(df, 'time') * 1e-6
+    fs = 1.0 / np.median(np.diff(t))
+    if segments is None:
+        segments, src = find_excitation_segments(df)
+        src = src if isinstance(src, str) else src[axis]
+    else:
+        src = 'user windows'
+    segs = segments[axis]
+
+    r = _filled(df, f'setpoint[{i}]')
+    y = _filled(df, f'gyroADC[{i}]')
+    u = _filled(df, f'axisSum[{i}]')
+    outs = {'y': y, 'u': u}
+    have_rpm = use_rpm and 'eRPM[0]' in df.columns
+    if have_rpm:
+        e = df[[f'eRPM[{k}]' for k in range(4)]].astype(float).ffill().bfill()
+        w_rotor = rotor_speeds(e, motor_poles, erpm_scale)
+        outs['rpm'] = w_rotor @ (mixer or MIXER_QUADX)[axis]
+
+    f, Srr, S, n_avg, nps = _pooled_spectra(segs, r, outs, fs, nperseg)
+    Sry, Syy = S['y']
+    Sru, Suu = S['u']
+    coh_y = np.abs(Sry) ** 2 / np.maximum(Srr * Syy, 1e-300)
+    coh_u = np.abs(Sru) ** 2 / np.maximum(Srr * Suu, 1e-300)
+    H = Sry / Sru
+    coh = np.minimum(coh_y, coh_u)
+
+    lead = (axis == 'yaw')
+    fit = _fit_lag(f, H, coh, f_lo, f_hi, coh_min, integrator=True, lead=lead)
+
+    rpm = None
+    if have_rpm:
+        Srw, Sww = S['rpm']
+        coh_w = np.abs(Srw) ** 2 / np.maximum(Srr * Sww, 1e-300)
+        try:
+            fr = _fit_lag(f, Srw / Sru, np.minimum(coh_w, coh_u), f_lo, f_hi,
+                          coh_min, integrator=False, lead=False)
+            rpm = dict(tau=fr['tau'], tau_sd=fr['tau_sd'], delay=fr['delay'],
+                       err=fr['err'], n_bins=fr['n_bins'], f_hi_hz=fr['f_hi_hz'])
+        except ValueError as exc:
+            rpm = dict(error=str(exc))
+
+    tau = fit['tau']
+    f_corner = 1.0 / (2 * np.pi * tau)
+    return dict(tau=tau, tau_sd=fit['tau_sd'], delay=fit['delay'],
+                delay_sd=fit['delay_sd'], b_acc=fit['k'],
+                b0_lag=(fit['k'] / tau if not lead else float('nan')),
+                zero_rad_s=(1.0 / fit['Tz'] if lead else None),
+                err=fit['err'], n_bins=fit['n_bins'],
+                f_lo_hz=fit['f_lo_hz'], f_hi_hz=fit['f_hi_hz'],
+                f_corner_hz=f_corner,
+                # The lag is only pinned when the coherent band runs well past
+                # its corner; below ~3x the corner tau and the delay trade off.
+                resolved=bool(fit['f_hi_hz'] >= 3.0 * f_corner and not fit['tau_at_bound']),
+                tau_at_bound=fit['tau_at_bound'],
+                source=src, n_windows=len(segs),
+                duration_s=float(sum(b - a for a, b in segs) / fs),
+                nperseg=nps, rpm=rpm, f=f, H=H, coh=coh, band=fit['band'])
+
+def motor_lag_warnings(lag):
+    '''[WARNING: ...] lines for a motor-lag result, as a list of strings.'''
+    if lag is None:
+        return []
+    if lag.get('error'):
+        return [f"motor lag not estimated ({lag['error']})"]
+    flags = []
+    if lag['source'] != 'chirp':
+        flags.append("no chirp window for this axis -- motor lag fitted on the "
+                     f"{lag['source']}")
+    if lag['tau_at_bound']:
+        flags.append("motor lag hit its fit bound -- not identified")
+    elif not lag['resolved']:
+        flags.append(f"motor lag corner ({lag['f_corner_hz']:.0f} Hz) is not well inside "
+                     f"the coherent band (to {lag['f_hi_hz']:.0f} Hz) -- lag and delay "
+                     "trade off, treat tau as rough")
+    rpm = lag.get('rpm')
+    if rpm and 'tau' in rpm:
+        gap = abs(rpm['tau'] - lag['tau']) / max(0.5 * (rpm['tau'] + lag['tau']), 1e-9)
+        if gap > 0.3:
+            # The rotor-to-gyro path can only add lag. A shorter gyro value is
+            # the gyro fit trading lag against delay; a longer one is lag the
+            # controller really sees (gyro filtering, frame, props).
+            which = ("trust the eRPM value; a shorter gyro value is fit bias"
+                     if lag['tau'] < rpm['tau'] else
+                     "trust the gyro value; the extra lag (gyro filtering, frame, "
+                     "props) is real and the eRPM can't see it")
+            flags.append(f"gyro and eRPM motor lag disagree by {gap*100:.0f}% "
+                         f"({lag['tau']*1e3:.1f} vs {rpm['tau']*1e3:.1f} ms) -- {which}")
+    return flags
+
+def _axis_dict(v):
+    '''Scalar -> same value on every axis; dict -> per-axis; None -> all None.'''
+    if isinstance(v, dict):
+        return {a: v.get(a) for a in AXIS_NAMES}
+    return {a: v for a in AXIS_NAMES}
+
+def wc_label(wc):
+    '''"80 rad/s", or "roll 80 / pitch 80 / yaw 60 rad/s" when the axes differ.'''
+    d = _axis_dict(wc)
+    vals = [d[a] for a in AXIS_NAMES]
+    if all(v == vals[0] for v in vals):
+        return f"{vals[0]:g} rad/s"
+    return " / ".join(f"{a} {d[a]:g}" for a in AXIS_NAMES) + " rad/s"
+
+# Detail columns that show_fit_summary(verbose=False) leaves out
+VERBOSE_COLUMNS = ('yaw HF gain', 'band', 'source', 'wc*(tau+d)')
+
+def drop_verbose_columns(table):
+    '''table without the VERBOSE_COLUMNS (whichever of them it has).'''
+    return table.drop(columns=[c for c in VERBOSE_COLUMNS if c in table.columns])
+
+def motor_lag_table(results, wc=None, wo=None):
+    '''
+    Per-axis motor lag table (DataFrame) from fit_plant_from_csv_indirect()
+    results. With wc it adds wc*(tau+d), and with wo it adds wo*tau: the two
+    products ADRC_MATH_REVIEW.md 2-3 tunes against (stability ceiling near
+    wc*tau ~ 2). wc/wo may be scalars or per-axis dicts.
+    '''
+    wc = _axis_dict(wc) if wc is not None else None
+    wo = _axis_dict(wo) if wo is not None else None
+    rows = []
+    for axis in AXIS_NAMES:
+        lag = results[axis].get('motor_lag')
+        row = {'axis': axis}
+        if lag is None or lag.get('error'):
+            row['motor lag (gyro)'] = 'n/a'
+            row['motor lag (eRPM)'] = 'n/a'
+            rows.append(row)
+            continue
+        # gyro: u -> gyro, what the controller sees. eRPM: u -> rotor speed,
+        # the motors alone; the more direct number when the two differ.
+        row['motor lag (gyro)'] = f"{lag['tau']*1e3:.1f} +/- {lag['tau_sd']*1e3:.1f} ms"
+        rpm = lag.get('rpm')
+        row['motor lag (eRPM)'] = (f"{rpm['tau']*1e3:.1f} +/- {rpm['tau_sd']*1e3:.1f} ms"
+                                   if rpm and 'tau' in rpm else 'n/a')
+        row['delay (gyro)'] = f"{lag['delay']*1e3:.1f} ms"
+        row['band'] = f"{lag['f_lo_hz']:.1f}-{lag['f_hi_hz']:.0f} Hz"
+        row['fit err'] = f"{lag['err']:.3f}"
+        row['source'] = lag['source']
+        if wo is not None and wo[axis] is not None:
+            row['wo*tau'] = f"{wo[axis] * lag['tau']:.2f}"
+        if wc is not None and wc[axis] is not None:
+            row['wc*(tau+d)'] = f"{wc[axis] * (lag['tau'] + lag['delay']):.2f}"
+        rows.append(row)
+    return pd.DataFrame(rows).fillna('n/a')
 
 ###################################################################
 #####  Stuff below this needs to be reviewed for correctness  #####
@@ -790,7 +1172,7 @@ def controller_consistency(r, y, u, fs, wc, wo, b0, order=2, nperseg=8192,
                 n_bins=int(m.sum()))
 
 
-def axis_warnings(fit, bw, bw_fit, b0_values=None, adrc_flight=True):
+def axis_warnings(fit, bw, bw_fit, b0_values=None, adrc_flight=True, lag=None):
     """
     The [WARNING: ...] lines for one axis, as a list of strings.
 
@@ -810,6 +1192,8 @@ def axis_warnings(fit, bw, bw_fit, b0_values=None, adrc_flight=True):
         bandwidth ratio and the phase margin at the configured wc, both of
         which compare a measured closed loop against controller settings that
         were never in the loop.
+    lag       : an estimate_motor_lag() result dict, or None to skip the motor
+                lag checks
     """
     f_val = bw_fit.get('f_valid_hz', float('nan')) if bw_fit else float('nan')
     flags = []
@@ -866,21 +1250,61 @@ def axis_warnings(fit, bw, bw_fit, b0_values=None, adrc_flight=True):
                       + ("2nd pole unresolved" if wm_flag else "")
                       + (" and " if wm_flag and pk_flag else "")
                       + ("closed loop is resonant" if pk_flag else ""))
+    z = fit.get('zero')
+    if z:
+        wc_used = fit.get('wc_used')
+        if wc_used is None and bw is not None:
+            wc_used = bw.get('wc_cfg')
+        if wc_used and z < 0.5 * wc_used:
+            flags.append(
+                f"yaw is ~1st order at wc (zero at {z:.1f} rad/s): b0_eff ~ wc x HF gain "
+                f"({hf_gain(fit):.0f}), so re-fit b0 whenever yaw wc changes")
+        if fit.get('f_valid_hz', np.inf) < 10.0:
+            flags.append(
+                f"yaw coherent only to {fit['f_valid_hz']:.0f} Hz -- too low to pin the "
+                "reaction-torque zero and the motor lag; fly a yaw chirp")
+    flags += motor_lag_warnings(lag)
     return flags
 
 
+def _sweep_fit(fit, fit_rpm):
+    '''
+    Fit the bandwidth sweep runs against. Normally the eRPM fit (best-
+    conditioned b0). On yaw (lead-zero fit) the eRPM leg loses coherence
+    early, while the closed-loop yaw fit stays coherent far wider on a chirp,
+    so use whichever lead fit is backed by data to the higher frequency --
+    the yaw crossover sits well above 15 Hz.
+    '''
+    if fit_rpm is None:
+        return fit
+    if fit.get('zero') and fit.get('f_valid_hz', 0) > fit_rpm.get('f_valid_hz', 0):
+        return fit
+    return fit_rpm
+
 # Function that does all the fitting and plotting. 
-def fit_plant_from_csv_indirect(csv_path, wo, b0, wc, order=2, nperseg=8192,
+def fit_plant_from_csv_indirect(csv_path, wo=None, b0=None, wc=None, order=2, nperseg=8192,
                                 f_lo=0.8, f_hi=15.0, coh_min=0.85,
                                 cross_check=True, use_rpm=True,
                                 include_dterm=False, out_dir='Output metrics',
                                 full_output=False, adrc_flight=True,
-                                suggest_wc=True, save_outputs=True):
+                                suggest_wc=True, save_outputs=True,
+                                motor_lag=True, lag_f_hi=60.0, lag_coh_min=0.8,
+                                lag_nperseg=4096, yaw_lead=True, yaw_f_hi=60.0,
+                                wc_proposed=80.0):
     '''
     Recovers and fits the open-loop plant for roll/pitch/yaw from a blackbox
     log, given the (wc, wo, b0) the flight was flown with.
 
-    wo/b0/wc: float (all axes) or dict keyed by axis name.
+    wc_proposed: the wc you intend to fly (float, or dict keyed by axis
+        name), default 80. Every b0 reported -- console footer, b0 table,
+        results[axis]['b0_eff'] -- is b0_eff = wc_proposed^2 * |G(j*wc_proposed)|,
+        i.e. the b0 that matches the plant at that wc. The plant is not
+        exactly b0/s^2, so this number depends on wc (strongly on yaw): set it
+        to the wc you will actually fly, and re-run if you change it.
+    wo/b0/wc: what the log was flown with, float (all axes) or dict keyed by
+        axis name. Needed only when adrc_flight=True. With adrc_flight=False
+        they may be None; wo/b0 are then only used, as the proposed values,
+        by the bandwidth analysis (suggest_wc=True).
     cross_check: also run the controller-free recovery (needs axisSum) and
         report it alongside. If the two disagree by more than ~20% the
         assumed controller parameters are wrong, not the data.
@@ -901,10 +1325,31 @@ def fit_plant_from_csv_indirect(csv_path, wo, b0, wc, order=2, nperseg=8192,
         the best-conditioned path for b0, since the u -> rotor-speed leg
         stays coherent past 25 Hz instead of dying with the sticks at 15 Hz.
 
-    All three paths report b0 as b0_eff = wc^2*|G(j*wc)| so the numbers are
-    directly comparable, and comparable to what you configured.
+    motor_lag: also estimate the motor lag (estimate_motor_lag) on each axis.
+        It is fitted on its own wider band (up to lag_f_hi, coherence >=
+        lag_coh_min) over the chirp windows only, independent of f_hi/coh_min
+        above, because the b0 band is too narrow to separate lag from delay.
+        Result in results[axis]['motor_lag'] (tau and delay in seconds);
+        motor_lag_table(results) tabulates it.
 
-    Returns {axis: {K, a, wm, tau, b0, rms_rel, f, G, coh, tf, ...}}
+    All three paths report b0 as b0_eff at wc_proposed, so the numbers are
+    directly comparable to each other.
+
+    yaw_lead: fit yaw with the lead-zero model (fit_plant_frf(lead=True)).
+        The yaw plant has a zero from rotor reaction torque, and above it is
+        close to first order, so the no-zero model misfits it. Also reports
+        the yaw high-frequency gain (hf_gain), the wc-independent yaw number.
+    yaw_f_hi: upper fit frequency for the yaw closed-loop fits when the log
+        has a yaw chirp window (otherwise f_hi is used). Yaw stays coherent
+        far past 15 Hz on a chirp, and the wider band is what lets the
+        bandwidth sweep check the yaw crossover against data instead of
+        extrapolating.
+
+    Note: 'tau' in the fit dicts is the fitted transport delay and 1/wm is the
+    second pole of the b0 model; neither is the motor lag, because the b0 band
+    (f_hi) is too narrow to tell the two apart. Use results[axis]['motor_lag'].
+
+    Returns {axis: {K, a, wm, tau, b0, rms_rel, f, G, coh, tf, motor_lag, ...}}
     '''
     df = load_blackbox_csv(csv_path)
     hdr = read_blackbox_header(csv_path)
@@ -915,9 +1360,18 @@ def fit_plant_from_csv_indirect(csv_path, wo, b0, wc, order=2, nperseg=8192,
     out_png = out_dir / f'{base} Plant fit.png'
     out_txt = out_dir / f'{base} Plant fit.txt'
 
-    def per_axis(v):
-        return {a: v.get(a) for a in AXIS_NAMES} if isinstance(v, dict) else {a: v for a in AXIS_NAMES}
-    wo_a, b0_a, wc_a = per_axis(wo), per_axis(b0), per_axis(wc)
+    wo_a, b0_a, wc_a = _axis_dict(wo), _axis_dict(b0), _axis_dict(wc)
+    wp_a = _axis_dict(wc_proposed)
+    if any(wp_a[a] is None for a in AXIS_NAMES):
+        raise ValueError("wc_proposed must be given for every axis")
+    if adrc_flight and any(v[a] is None for v in (wc_a, wo_a, b0_a) for a in AXIS_NAMES):
+        raise ValueError("adrc_flight=True needs the flown wc, wo and b0 for every axis")
+    if suggest_wc and not adrc_flight and any(v[a] is None for v in (wo_a, b0_a)
+                                              for a in AXIS_NAMES):
+        raise ValueError("suggest_wc=True on a non-ADRC log needs a proposed wo and b0")
+    # wc the bandwidth analysis evaluates: the flown one on an ADRC log, the
+    # proposed one otherwise
+    wcb_a = wc_a if adrc_flight else wp_a
 
     buf = io.StringIO()
     class Tee(io.TextIOBase):
@@ -925,6 +1379,8 @@ def fit_plant_from_csv_indirect(csv_path, wo, b0, wc, order=2, nperseg=8192,
             sys.__stdout__.write(s); buf.write(s); return len(s)
 
     results = {}
+    _segs, _src = find_excitation_segments(df)
+    yaw_chirp = (_src if isinstance(_src, str) else _src['yaw']) == 'chirp'
     fig, axes = plt.subplots(1, 3, figsize=(16, 8))
 
     with contextlib.redirect_stdout(Tee()):
@@ -935,7 +1391,8 @@ def fit_plant_from_csv_indirect(csv_path, wo, b0, wc, order=2, nperseg=8192,
               + ("adrc and ctrl-free share the same data and are not independent "
                  "of each other; eRPM is.\n" if adrc_flight else
                  "Log not flown with ADRC: the adrc recovery is skipped and ctrl-free is the "
-                 "primary path.\nwc/wo/b0 below are read as proposed values, not flown ones.\n")
+                 "primary path.\n")
+              + f"b0 is reported at the proposed wc = {wc_label(wc_proposed)}.\n"
               + ("Margin sweep includes header lag "
                  f"(gyro lpf2={_lag['gyro_lpf2']:.0f} Hz, delay={_lag['delay_s']*1e3:.2f} ms); "
                  "notches excluded, so margins stay slightly optimistic."
@@ -944,13 +1401,15 @@ def fit_plant_from_csv_indirect(csv_path, wo, b0, wc, order=2, nperseg=8192,
         for i, axis in enumerate(AXIS_NAMES):
             t, r, y, u = get_axis_signals(df, axis)
             fs = 1.0 / np.median(np.diff(t))
+            lead = bool(yaw_lead and axis == 'yaw')
+            ax_f_hi = max(f_hi, yaw_f_hi) if (lead and yaw_chirp) else f_hi
 
             if adrc_flight:
                 f, G, coh, cond = recover_plant_frf(
                     r, y, u, fs, wc=wc_a[axis], wo=wo_a[axis], b0=b0_a[axis],
                     order=order, nperseg=nperseg, method='adrc')
-                fit = fit_plant_frf(f, G, coh, f_lo=f_lo, f_hi=f_hi,
-                                    coh_min=coh_min, cond=cond)
+                fit = fit_plant_frf(f, G, coh, f_lo=f_lo, f_hi=ax_f_hi,
+                                    coh_min=coh_min, cond=cond, lead=lead)
             else:
                 # No ADRC controller to invert, so the controller-free
                 # recovery (r as instrument, u measured) is the primary path.
@@ -960,8 +1419,8 @@ def fit_plant_from_csv_indirect(csv_path, wo, b0, wc, order=2, nperseg=8192,
                         "for the controller-free recovery")
                 f, G, coh, cond = recover_plant_frf(
                     r, y, u, fs, nperseg=nperseg, method='controller_free')
-                fit = fit_plant_frf(f, G, coh, f_lo=f_lo, f_hi=f_hi,
-                                    coh_min=coh_min)
+                fit = fit_plant_frf(f, G, coh, f_lo=f_lo, f_hi=ax_f_hi,
+                                    coh_min=coh_min, lead=lead)
             band = fit['band']
 
             fit_rpm = None
@@ -975,8 +1434,8 @@ def fit_plant_from_csv_indirect(csv_path, wo, b0, wc, order=2, nperseg=8192,
             if adrc_flight and cross_check and u is not None:
                 _, G_cf, _, _ = recover_plant_frf(r, y, u, fs, nperseg=nperseg,
                                                   method='controller_free')
-                fit_cf = fit_plant_frf(f, G_cf, coh, f_lo=f_lo, f_hi=f_hi,
-                                       coh_min=coh_min)
+                fit_cf = fit_plant_frf(f, G_cf, coh, f_lo=f_lo, f_hi=ax_f_hi,
+                                       coh_min=coh_min, lead=lead)
 
             ctrl_chk = None
             if adrc_flight:
@@ -984,10 +1443,19 @@ def fit_plant_from_csv_indirect(csv_path, wo, b0, wc, order=2, nperseg=8192,
                     r, y, u, fs, wc_a[axis], wo_a[axis], b0_a[axis],
                     order=order, nperseg=nperseg)
 
-            bw_fit = fit_rpm if fit_rpm is not None else fit
+            lag = None
+            if motor_lag:
+                try:
+                    lag = estimate_motor_lag(df, axis, nperseg=lag_nperseg,
+                                             f_hi=lag_f_hi, coh_min=lag_coh_min,
+                                             use_rpm=use_rpm)
+                except Exception as exc:
+                    lag = dict(error=str(exc))
+
+            bw_fit = _sweep_fit(fit, fit_rpm)
             bw = None
             if suggest_wc:
-                bw = suggest_bandwidth(r, y, fs, bw_fit, wc_a[axis], wo_a[axis],
+                bw = suggest_bandwidth(r, y, fs, bw_fit, wcb_a[axis], wo_a[axis],
                                        b0_a[axis], order=order, nperseg=nperseg,
                                        hdr=hdr, include_dterm=include_dterm,
                                        axis=axis, coh_min=coh_min)
@@ -998,25 +1466,29 @@ def fit_plant_from_csv_indirect(csv_path, wo, b0, wc, order=2, nperseg=8192,
             results[axis] = dict(fit, f=f, G=G, coh=coh, cond=cond, tf=tf,
                                  t=tt, impulse=h, step=st,
                                  G_cf=G_cf, fit_cf=fit_cf, fit_rpm=fit_rpm,
-                                 b0_eff=b0_effective(fit, wc_a[axis]),
-                                 bandwidth=bw, ctrl_check=ctrl_chk)
+                                 b0_eff=b0_effective(fit, wp_a[axis]),
+                                 bandwidth=bw, ctrl_check=ctrl_chk,
+                                 motor_lag=lag, axis=axis, wc_used=wp_a[axis])
 
             # --- footer text: b0 and bandwidth only, with error bars -----
-            b0_c, b0_sd = b0_uncertainty(fit, wc_a[axis])
+            b0_c, b0_sd = b0_uncertainty(fit, wp_a[axis])
             rows = [(('closed-loop / adrc' if adrc_flight else '        ctrl-free'),
                      b0_c, b0_sd)]
             if fit_cf is not None:
-                v, sd = b0_uncertainty(fit_cf, wc_a[axis])
+                v, sd = b0_uncertainty(fit_cf, wp_a[axis])
                 rows.append(('  ctrl-free check', v, sd))
             if fit_rpm is not None:
-                v, sd = b0_uncertainty(fit_rpm, wc_a[axis])
+                v, sd = b0_uncertainty(fit_rpm, wp_a[axis])
                 rows.append(('eRPM decomposition', v, sd))
 
             _cfgword = 'configured' if adrc_flight else 'proposed'
-            msg = f"{axis:>6}  b0_eff at wc={wc_a[axis]:.0f}   ({_cfgword} {b0_a[axis]:.0f})"
+            msg = f"{axis:>6}  b0_eff at proposed wc={wp_a[axis]:g}"
+            if adrc_flight:
+                msg += f"   (flown with wc={wc_a[axis]:g}, b0={b0_a[axis]:.0f})"
             for name, v, sd in rows:
-                msg += (f"\n           {name:<20s} {v:7.0f} +/- {sd:5.0f}"
-                        f"   [{v/b0_a[axis]*100:3.0f}% of {_cfgword}]")
+                msg += f"\n           {name:<20s} {v:7.0f} +/- {sd:5.0f}"
+                if adrc_flight:
+                    msg += f"   [{v/b0_a[axis]*100:3.0f}% of configured]"
 
             # The two families are independent; ctrl-free shares data with adrc.
             indep = [r for r in rows if not r[0].startswith('  ')]
@@ -1048,15 +1520,41 @@ def fit_plant_from_csv_indirect(csv_path, wo, b0, wc, order=2, nperseg=8192,
                         + (f"{bw['pm_cfg']:5.1f} +/- {bw['pm_cfg_sd']:4.2f} deg"
                            if bw['pm_cfg'] == bw['pm_cfg'] else "n/a (|L|<1)"))
 
+            if fit.get('zero'):
+                _hf, _hf_sd = hf_gain_uncertainty(fit)
+                _hfs = [f"{_hf:.0f} +/- {_hf_sd:.1f}"]
+                if fit_cf is not None and fit_cf.get('zero'):
+                    _hfs.append(f"ctrl-free {hf_gain(fit_cf):.0f}")
+                if fit_rpm is not None and fit_rpm.get('zero'):
+                    _hfs.append(f"eRPM {hf_gain(fit_rpm):.0f}")
+                msg += (f"\n         1st-order yaw: zero at {fit['zero']:.1f} rad/s, "
+                        f"HF gain = {', '.join(_hfs)}  (b0 for a 1st-order ADRC)"
+                        f"\n           b0_eff above is ~ wc x HF gain, so it moves with wc"
+                        f"   [fit {f_lo:.1f}-{fit['f_valid_hz']:.0f} Hz, rms {fit['rms_rel']:.3f}]")
+
+            if lag is not None and not lag.get('error'):
+                _rpm = lag.get('rpm') or {}
+                msg += (f"\n         motor lag = {lag['tau']*1e3:.1f} +/- {lag['tau_sd']*1e3:.1f} ms"
+                        f", delay {lag['delay']*1e3:.1f} ms"
+                        + (f"   (eRPM check {_rpm['tau']*1e3:.1f} ms)" if 'tau' in _rpm else "")
+                        + f"   [{lag['f_lo_hz']:.1f}-{lag['f_hi_hz']:.0f} Hz, {lag['source']}]"
+                        + "\n           "
+                        + (f"wo*tau = {wo_a[axis]*lag['tau']:.2f} (flown wo), "
+                           if adrc_flight else "")
+                        + f"wc*(tau+d) = {wp_a[axis]*(lag['tau']+lag['delay']):.2f} (proposed wc)"
+                        + (f",  b_acc/tau = {lag['b0_lag']:.0f}" if lag['b0_lag'] == lag['b0_lag']
+                           else f",  lead zero at {lag['zero_rad_s']:.1f} rad/s"))
+
             if ctrl_chk and ctrl_chk['ratio'] == ctrl_chk['ratio']:
                 msg += (f"\n         controller check: u/r is "
                         f"{ctrl_chk['ratio']:.2f}x predicted, "
                         f"{ctrl_chk['phase_deg']:+.0f} deg off "
                         f"({ctrl_chk['n_bins']} bins)")
 
-            flags = axis_warnings(dict(fit, ctrl_check=ctrl_chk), bw, bw_fit,
+            flags = axis_warnings(dict(fit, ctrl_check=ctrl_chk, wc_used=wp_a[axis]),
+                                  bw, bw_fit,
                                   b0_values=[r[1] for r in rows],
-                                  adrc_flight=adrc_flight)
+                                  adrc_flight=adrc_flight, lag=lag)
             for fl in flags:
                 msg += f"\n         [WARNING: {fl}]"
             print(msg)
@@ -1071,11 +1569,9 @@ def fit_plant_from_csv_indirect(csv_path, wo, b0, wc, order=2, nperseg=8192,
                 ax0.loglog(f[band_cf], np.abs(G_cf[band_cf]), 'C2.', ms=3, alpha=.6,
                            label='controller-free check')
                 if fit_cf is not None:
-                    ax0.loglog(f[band_cf], np.abs(plant_model_frf(2*np.pi*f[band_cf],
-                                [fit_cf['K'], fit_cf['a'], fit_cf['wm'], fit_cf['tau']])),
+                    ax0.loglog(f[band_cf], np.abs(plant_frf_from_fit(fit_cf, 2*np.pi*f[band_cf])),
                                'C5-', lw=1.6, alpha=.9, label='controller-free fit')
-            ax0.loglog(f[band], np.abs(plant_model_frf(2*np.pi*f[band],
-                        [fit['K'], fit['a'], fit['wm'], fit['tau']])), 'C3-', lw=2,
+            ax0.loglog(f[band], np.abs(plant_frf_from_fit(fit, 2*np.pi*f[band])), 'C3-', lw=2,
                        label=f'{_plabel} fit')
             if fit_rpm is not None:
                 fr_ = fit_rpm['f']; br_ = fit_rpm['band']
@@ -1127,23 +1623,37 @@ def _txt_table(df):
     return '\n'.join(lines)
 
 
-def show_fit_summary(csv_path, wc, wo, b0, order=2, nperseg=8192, f_lo=0.8,
+def show_fit_summary(csv_path, wc=None, wo=None, b0=None, order=2, nperseg=8192, f_lo=0.8,
                      f_hi=15.0, coh_min=0.85, cross_check=True, use_rpm=True,
                      include_dterm=False, out_dir='Output metrics', results=None,
-                     adrc_flight=True, suggest_wc=True, save_outputs=True):
+                     adrc_flight=True, suggest_wc=True, save_outputs=True,
+                     motor_lag=True, lag_f_hi=60.0, lag_coh_min=0.8,
+                     lag_nperseg=4096, yaw_lead=True, yaw_f_hi=60.0,
+                     wc_proposed=80.0, verbose=False):
     '''
     Runs fit_plant_from_csv_indirect() (unless a precomputed `results` dict
     is passed in) and displays the b0 and bandwidth summary tables built
     from it, plus the wc/wo/b0 dicts the flight was flown with.
 
+    wc_proposed (default 80, float or per-axis dict): the wc you intend to
+    fly. The b0 table is b0_eff at this wc; see fit_plant_from_csv_indirect().
+
+    verbose=False leaves the detail columns (VERBOSE_COLUMNS: yaw HF gain,
+    fit band, data source, wc*(tau+d)) out of the displayed, saved and
+    returned tables. verbose=True keeps them.
+
     adrc_flight=False drops the closed-loop 'adrc' column and any warning
-    that depends on it; see fit_plant_from_csv_indirect().
+    that depends on it; wc/wo/b0 can then be None (see
+    fit_plant_from_csv_indirect()).
 
     suggest_wc=False skips the bandwidth / wc analysis entirely: no bandwidth
     table (bw_table is returned as None) and only the b0-fit warnings.
 
     save_outputs=False writes no files: no plot/metrics log from the fit and
     no summary tables .txt. Everything is still displayed in the notebook.
+
+    motor_lag=True also displays the motor lag table (motor_lag_table) and
+    writes it to the summary .txt; see fit_plant_from_csv_indirect().
 
     Returns (results, b0_table, bw_table).
     '''
@@ -1153,8 +1663,13 @@ def show_fit_summary(csv_path, wc, wo, b0, order=2, nperseg=8192, f_lo=0.8,
             f_lo=f_lo, f_hi=f_hi, coh_min=coh_min, cross_check=cross_check,
             use_rpm=use_rpm, include_dterm=include_dterm, out_dir=out_dir,
             adrc_flight=adrc_flight, suggest_wc=suggest_wc,
-            save_outputs=save_outputs,
+            save_outputs=save_outputs, motor_lag=motor_lag, lag_f_hi=lag_f_hi,
+            lag_coh_min=lag_coh_min, lag_nperseg=lag_nperseg,
+            yaw_lead=yaw_lead, yaw_f_hi=yaw_f_hi, wc_proposed=wc_proposed,
         )
+    wc_p = _axis_dict(wc_proposed)
+    wc_bw = _axis_dict(wc) if adrc_flight else wc_p
+    wo, b0 = _axis_dict(wo), _axis_dict(b0)
 
     if suggest_wc and any(results[a].get('bandwidth') is None for a in AXIS_NAMES):
         raise ValueError("results were computed with suggest_wc=False; rerun "
@@ -1194,15 +1709,15 @@ def show_fit_summary(csv_path, wc, wo, b0, order=2, nperseg=8192, f_lo=0.8,
     for axis in AXIS_NAMES:
         res = results[axis]
 
-        adrc_v, adrc_sd = b0_uncertainty(res, wc[axis])
+        adrc_v, adrc_sd = b0_uncertainty(res, wc_p[axis])
 
         cf_v = cf_sd = float('nan')
         if res.get('fit_cf') is not None:
-            cf_v, cf_sd = b0_uncertainty(res['fit_cf'], wc[axis])
+            cf_v, cf_sd = b0_uncertainty(res['fit_cf'], wc_p[axis])
 
         rpm_v = rpm_sd = float('nan')
         if res.get('fit_rpm') is not None:
-            rpm_v, rpm_sd = b0_uncertainty(res['fit_rpm'], wc[axis])
+            rpm_v, rpm_sd = b0_uncertainty(res['fit_rpm'], wc_p[axis])
 
         # Gap between the two *independent* methods, matching the console
         # footer: adrc vs eRPM when flown with ADRC (ctrl-free shares data
@@ -1229,12 +1744,34 @@ def show_fit_summary(csv_path, wc, wo, b0, order=2, nperseg=8192, f_lo=0.8,
             # adrc_flight=False it's a hypothetical the log can't confirm,
             # so there is nothing useful to compare it against here
             row['configured'] = f'{b0[axis]:.0f}'
+        # Yaw only: the |G|*w plateau, which does not move with wc
+        if any(results[a].get('zero') for a in AXIS_NAMES):
+            if res.get('zero'):
+                hf, hf_sd = hf_gain_uncertainty(res)
+                extra = [f"{lbl} {hf_gain(fx):.0f}" for lbl, fx in
+                         (('ctrl-free', res.get('fit_cf')), ('eRPM', res.get('fit_rpm')))
+                         if fx is not None and fx.get('zero')]
+                row['yaw HF gain'] = (f'{hf:.0f} +/- {hf_sd:.1f}'
+                                      + (f" ({', '.join(extra)})" if extra else ''))
+            else:
+                row['yaw HF gain'] = '-'
         b0_rows.append(row)
 
     b0_table = pd.DataFrame(b0_rows)
+    if not verbose:
+        b0_table = drop_verbose_columns(b0_table)
+    b0_table.attrs['wc_proposed'] = wc_label(wc_proposed)
     b0_by_axis = {r['axis']: v for r, v in zip(b0_rows, _b0_vals)}
 
-    display(_style_table(b0_table))
+    display(_style_table(b0_table).set_caption(
+        f"b0 (deg/s per u) at proposed wc = {wc_label(wc_proposed)}"))
+
+    lag_table = None
+    if any(results[a].get('motor_lag') is not None for a in AXIS_NAMES):
+        lag_table = motor_lag_table(results, wc=wc_p, wo=(wo if adrc_flight else None))
+        if not verbose:
+            lag_table = drop_verbose_columns(lag_table)
+        display(_style_table(lag_table))
 
     # Bandwidth table
     # achieved -3dB basically tells the fastest response the system actually keeps up with
@@ -1252,8 +1789,8 @@ def show_fit_summary(csv_path, wc, wo, b0, order=2, nperseg=8192, f_lo=0.8,
 
             t, r, y, u = get_axis_signals(df, axis)
             fs = 1.0 / np.median(np.diff(t))
-            bw_fit = res['fit_rpm'] if res.get('fit_rpm') is not None else res
-            bw60 = suggest_bandwidth(r, y, fs, bw_fit, wc[axis], wo[axis], b0[axis],
+            bw_fit = _sweep_fit(res, res.get('fit_rpm'))
+            bw60 = suggest_bandwidth(r, y, fs, bw_fit, wc_bw[axis], wo[axis], b0[axis],
                                      hdr=hdr, pm_target=60.0, axis=axis,
                                      coh_min=coh_min)
             bw60_by_axis[axis] = bw60
@@ -1297,9 +1834,10 @@ def show_fit_summary(csv_path, wc, wo, b0, order=2, nperseg=8192, f_lo=0.8,
     warn_lines = []
     for axis in AXIS_NAMES:
         res = results[axis]
-        bw_fit = res['fit_rpm'] if res.get('fit_rpm') is not None else res
+        bw_fit = _sweep_fit(res, res.get('fit_rpm'))
         flags = axis_warnings(res, res['bandwidth'] if suggest_wc else None, bw_fit,
-                              b0_values=b0_by_axis[axis], adrc_flight=adrc_flight)
+                              b0_values=b0_by_axis[axis], adrc_flight=adrc_flight,
+                              lag=res.get('motor_lag'))
         # a ceiling that is band-limited at 45 deg is band-limited at 60 too,
         # but the 60 deg column can trip the bound flag on its own
         bw60 = bw60_by_axis[axis]
@@ -1326,9 +1864,14 @@ def show_fit_summary(csv_path, wc, wo, b0, order=2, nperseg=8192, f_lo=0.8,
             title = f"{base} -- plant fit summary"
             fh.write(f"{title}\n{'=' * len(title)}\n\n")
 
-            fh.write("b0 (deg/s per u) by method\n")
-            fh.write("--------------------------\n")
+            _t = f"b0 (deg/s per u) by method, at proposed wc = {wc_label(wc_proposed)}"
+            fh.write(_t + "\n" + "-" * len(_t) + "\n")
             fh.write(_txt_table(b0_table))
+
+            if lag_table is not None:
+                fh.write("\n\nMotor lag\n")
+                fh.write("---------\n")
+                fh.write(_txt_table(lag_table))
 
             if bw_table is not None:
                 fh.write("\n\nBandwidth\n")
