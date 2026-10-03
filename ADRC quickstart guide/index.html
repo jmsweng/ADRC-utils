@@ -298,10 +298,11 @@ set PID_TYPE = ADRC
 save</code></pre>
       </li>
       <li>Disable all PID filters except for motor RPM.</li>
-      <li>Use the plant fitting code to obtain <code>b0</code> values. Make sure the
-          <em>ctrl-free</em> and <em>eRPM</em> values are reasonably close to one another.
-          Multiply these by two and use them as the <code>adrc_b0</code> parameters for each
-          axis. Set the <code>wc</code> parameters for each axis to 80. Set the <code>wo</code>
+      <li>Use the <a href="../Plant%20fitting/">plant fitting tool</a> to obtain <code>b0</code>
+          values, with <strong>Proposed wc</strong> set to 80. Make sure the <em>ctrl-free</em>
+          and <em>eRPM</em> values are reasonably close to one another, then use them directly as
+          the <code>adrc_b0</code> parameters for each axis. Use the fitted motor lag as
+          <code>adrc_motor_tau_ms</code>. Set the <code>wc</code> parameters for each axis to 80. Set the <code>wo</code>
           parameters for each axis to 90. Set the following parameters in the Betaflight CLI:
         <pre><code>set adrc_b0_roll = &lt;calculated_roll_b0&gt;
 set adrc_b0_pitch = &lt;calculated_pitch_b0&gt;
@@ -312,6 +313,7 @@ set adrc_wc_yaw = 80
 set adrc_wo_roll = 90
 set adrc_wo_pitch = 90
 set adrc_wo_yaw = 90
+set adrc_motor_tau_ms = &lt;fitted_motor_lag&gt;
 save</code></pre>
       </li>
       <li>If flying with <code>pid_at_min_throttle = ON</code> (Betaflight default), the first
@@ -437,7 +439,9 @@ save</code></pre>
        basically be a hover with some wobbles commanded on each axis.</p>
 
     <h3 id="step-b0">Calculate b0 values from the recorded baseline flight</h3>
-    <p>Run the recorded blackbox log through the plant-fitting script to determine the nominal control gain (<code>b0</code>). The output of the fitting script includes several plots that
+    <p>Run the recorded blackbox log through the plant-fitting script to determine the nominal control gain (<code>b0</code>).
+       Before dropping in the log, set <strong>Proposed wc</strong> to the controller bandwidth
+       you plan to fly (80 if you&rsquo;re following this guide). The output of the fitting script includes several plots that
        show the points used for the fit along with the fit. Shown below is an example of a fit
        performed on the baseline flight from a 5&Prime; drone.</p>
 
@@ -450,10 +454,13 @@ save</code></pre>
        the points used for the fit). Also check that the calculated <em>ctrl-free</em> and
        <em>eRPM</em> values are reasonably close to each other. If the fits on the plot do not line
        up well, or the ctrl-free and eRPM values are very far apart, redo the baseline PID flight
-       with more movement on each axis. These output values correspond to fairly conservative
-       control parameters for use with an observer bandwidth (<code>wo</code>) around 50&ndash;60.
-       Take these values and multiply them each by two. These are your initial values for
-       <code>b0</code>.</p>
+       with more movement on each axis. The fitter reports <code>b0</code> matched to the
+       <code>wc</code> you entered, so the output values can be used directly as your initial
+       <code>b0</code> values with no further adjustment. If you later change <code>wc</code>,
+       rerun the fit with the new value to get a matching <code>b0</code>.</p>
+
+    <p>The fitter also outputs a motor lag value. Set this as <code>adrc_motor_tau_ms</code> in
+       the CLI.</p>
 
     <div class="adm">
       <div class="adm-head">Fit warnings</div>
@@ -479,7 +486,7 @@ save</code></pre>
 
     <h3 id="step-cli">Switch controller and apply parameters</h3>
     <p>Open the Betaflight CLI and run the following commands. Substitute in your calculated
-       <code>b0</code> values and measured hover throttle:</p>
+       <code>b0</code> values, fitted motor lag, and measured hover throttle:</p>
     <p class="cli-title">Betaflight CLI</p>
 <pre><code>set PID_TYPE = ADRC
 set adrc_hover_throttle = &lt;your_hover_throttle_value&gt;
@@ -492,6 +499,7 @@ set adrc_wc_yaw = 80
 set adrc_wo_roll = 90
 set adrc_wo_pitch = 90
 set adrc_wo_yaw = 90
+set adrc_motor_tau_ms = &lt;fitted_motor_lag&gt;
 save</code></pre>
     <p>The wc/wo values of 80/90 provide fairly responsive controls and are a good starting place
        for further tuning if desired.</p>
